@@ -1,0 +1,19 @@
+# Copyright (c) Ansible Project
+# GNU General Public License v3.0+ (see LICENSES/GPL-3.0-or-later.txt or https://www.gnu.org/licenses/gpl-3.0.txt)
+# SPDX-License-Identifier: GPL-3.0-or-later
+---
+- name: Load Proxmox integration configuration
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/../../integration_config.yml"
+
+- name: Set Proxmox authentication environment variables
+  ansible.builtin.set_fact:
+    environment_auth_vars:
+      REQUESTS_CA_BUNDLE: "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem"
+      PROXMOX_HOST: "{{ api_host }}"
+      PROXMOX_USER: "{{ api_user | default(omit, true) }}"
+      PROXMOX_PASSWORD: "{{ api_password | default(omit, true) }}"
+      PROXMOX_VALIDATE_CERTS: "{{ validate_certs | default(omit, true) }}"
+      PROXMOX_TOKEN_ID: "{{ api_token_id | default(omit, true) }}"
+      PROXMOX_TOKEN_SECRET: "{{ api_token_secret | default(omit, true) }}"
+  no_log: true

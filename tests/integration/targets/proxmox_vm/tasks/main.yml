@@ -1,0 +1,507 @@
+# Copyright (c) Ansible Project
+# GNU General Public License v3.0+ (see LICENSES/GPL-3.0-or-later.txt or https://www.gnu.org/licenses/gpl-3.0.txt)
+# SPDX-License-Identifier: GPL-3.0-or-later
+---
+- name: Exercise the VM lifecycle
+  environment: "{{ environment_auth_vars }}"
+  block:
+    - name: Remove stale test VMs before starting
+      ansible.proxmox.proxmox_vm:
+        api_host: "{{ api_host }}"
+        node: "{{ proxmox_node }}"
+        vmid: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ vmid_full }}"
+        - "{{ vmid_defaults }}"
+      failed_when: false
+
+    - name: Predict full VM creation in check mode
+      ansible.proxmox.proxmox_vm: &vm_full_config_args
+        node: "{{ vm_full_config.node }}"
+        vmid: "{{ vm_full_config.vmid }}"
+        name: "{{ vm_full_config.name }}"
+        memory: "{{ vm_full_config.memory }}"
+        cores: "{{ vm_full_config.cores }}"
+        sockets: "{{ vm_full_config.sockets }}"
+        cpu: "{{ vm_full_config.cpu }}"
+        machine: "{{ vm_full_config.machine }}"
+        ostype: "{{ vm_full_config.ostype }}"
+        bios: "{{ vm_full_config.bios }}"
+        efidisk: "{{ vm_full_config.efidisk }}"
+        vga: "{{ vm_full_config.vga }}"
+        ide2: "{{ vm_full_config.ide2 }}"
+        scsihw: "{{ vm_full_config.scsihw }}"
+        network: "{{ vm_full_config.network }}"
+        disk: "{{ vm_full_config.disk }}"
+        state: "{{ vm_full_config.state }}"
+      check_mode: true
+      register: vm999_check_mode
+
+    - name: Assert full VM check-mode result
+      ansible.builtin.assert:
+        that:
+          - vm999_check_mode is changed
+
+    - name: Verify check mode did not create VM 999
+      ansible.proxmox.proxmox_vm_info:
+        api_host: "{{ api_host }}"
+        node: "{{ proxmox_node }}"
+        vmid: "{{ vmid_full }}"
+      register: vm999_after_check_mode
+
+    - name: Assert VM 999 remains absent after check mode
+      ansible.builtin.assert:
+        that:
+          - vm999_after_check_mode.vms | length == 0
+
+    - name: Create VM 999 with the full configuration
+      ansible.proxmox.proxmox_vm: *vm_full_config_args
+      register: vm999_create
+
+    - name: Assert VM 999 was created
+      ansible.builtin.assert:
+        that:
+          - vm999_create is changed
+
+    - name: Get VM 999 configuration after creation
+      ansible.proxmox.proxmox_vm_info:
+        api_host: "{{ api_host }}"
+        node: "{{ proxmox_node }}"
+        vmid: "{{ vmid_full }}"
+      register: vm999_info
+
+    - name: Assert VM 999 initial configuration
+      ansible.builtin.assert:
+        that:
+          - vm999_info is not changed
+          - vm999_info.vms | length == 1
+          - vm999_info.vms[0].name == vm_full_config.name
+          - vm999_info.vms[0].memory | int == vm_full_config.memory
+          - vm999_info.vms[0].cores | int == vm_full_config.cores
+          - vm999_info.vms[0].sockets | int == vm_full_config.sockets
+          - vm999_info.vms[0].cpu == vm_full_config.cpu
+          - "'pc-i440fx-10.0' in vm999_info.vms[0].machine"
+          - vm999_info.vms[0].ostype == vm_full_config.ostype
+          - (vm999_info.vms[0].bios | default('seabios')) == 'seabios'
+          - vm999_info.vms[0].vga == vm_full_config.vga
+          - vm999_info.vms[0].scsihw == vm_full_config.scsihw
+          - vm999_info.vms[0].ide2 == 'none,media=cdrom'
+          - "'e1000e=' in vm999_info.vms[0].net0"
+          - "'bridge=vmbr0' in vm999_info.vms[0].net0"
+          - "'firewall=1' in vm999_info.vms[0].net0"
+          - "'tag=106' in vm999_info.vms[0].net0"
+          - "'e1000e=' in vm999_info.vms[0].net1"
+          - "'tag=106' in vm999_info.vms[0].net1"
+          - "'size=32G' in vm999_info.vms[0].scsi0"
+          - "'efidisk0' not in vm999_info.vms[0]"
+
+    - name: Create VM 999 idempotently
+      ansible.proxmox.proxmox_vm: *vm_full_config_args
+      register: vm999_create_again
+
+    - name: Assert VM 999 creation is idempotent
+      ansible.builtin.assert:
+        that:
+          - vm999_create_again is not changed
+
+    - name: Change VM 999 BIOS to OVMF
+      ansible.proxmox.proxmox_vm: &vm_full_ovmf_args
+        node: "{{ vm_full_ovmf_config.node }}"
+        vmid: "{{ vm_full_ovmf_config.vmid }}"
+        name: "{{ vm_full_ovmf_config.name }}"
+        memory: "{{ vm_full_ovmf_config.memory }}"
+        cores: "{{ vm_full_ovmf_config.cores }}"
+        sockets: "{{ vm_full_ovmf_config.sockets }}"
+        cpu: "{{ vm_full_ovmf_config.cpu }}"
+        machine: "{{ vm_full_ovmf_config.machine }}"
+        ostype: "{{ vm_full_ovmf_config.ostype }}"
+        bios: "{{ vm_full_ovmf_config.bios }}"
+        efidisk: "{{ vm_full_ovmf_config.efidisk }}"
+        vga: "{{ vm_full_ovmf_config.vga }}"
+        ide2: "{{ vm_full_ovmf_config.ide2 }}"
+        scsihw: "{{ vm_full_ovmf_config.scsihw }}"
+        network: "{{ vm_full_ovmf_config.network }}"
+        disk: "{{ vm_full_ovmf_config.disk }}"
+        state: "{{ vm_full_ovmf_config.state }}"
+      register: vm999_ovmf
+
+    - name: Assert VM 999 BIOS update changed the VM
+      ansible.builtin.assert:
+        that:
+          - vm999_ovmf is changed
+
+    - name: Get VM 999 configuration after BIOS update
+      ansible.proxmox.proxmox_vm_info:
+        api_host: "{{ api_host }}"
+        node: "{{ proxmox_node }}"
+        vmid: "{{ vmid_full }}"
+      register: vm999_ovmf_info
+
+    - name: Assert VM 999 EFI disk configuration
+      ansible.builtin.assert:
+        that:
+          - vm999_ovmf_info.vms[0].bios == 'ovmf'
+          - "'local-lvm:' in vm999_ovmf_info.vms[0].efidisk0"
+          - "'efitype=4m' in vm999_ovmf_info.vms[0].efidisk0"
+          - "'pre-enrolled-keys=0' in vm999_ovmf_info.vms[0].efidisk0"
+
+    - name: Reapply OVMF configuration idempotently
+      ansible.proxmox.proxmox_vm: *vm_full_ovmf_args
+      register: vm999_ovmf_again
+
+    - name: Assert OVMF configuration is idempotent
+      ansible.builtin.assert:
+        that:
+          - vm999_ovmf_again is not changed
+
+    - name: Attempt to change the existing VM disk and EFI disk
+      ansible.proxmox.proxmox_vm:
+        node: "{{ vm_full_immutable_attempt_config.node }}"
+        vmid: "{{ vm_full_immutable_attempt_config.vmid }}"
+        name: "{{ vm_full_immutable_attempt_config.name }}"
+        memory: "{{ vm_full_immutable_attempt_config.memory }}"
+        cores: "{{ vm_full_immutable_attempt_config.cores }}"
+        sockets: "{{ vm_full_immutable_attempt_config.sockets }}"
+        cpu: "{{ vm_full_immutable_attempt_config.cpu }}"
+        machine: "{{ vm_full_immutable_attempt_config.machine }}"
+        ostype: "{{ vm_full_immutable_attempt_config.ostype }}"
+        bios: "{{ vm_full_immutable_attempt_config.bios }}"
+        disk: "{{ vm_full_immutable_attempt_config.disk }}"
+        efidisk: "{{ vm_full_immutable_attempt_config.efidisk }}"
+        vga: "{{ vm_full_immutable_attempt_config.vga }}"
+        ide2: "{{ vm_full_immutable_attempt_config.ide2 }}"
+        scsihw: "{{ vm_full_immutable_attempt_config.scsihw }}"
+        network: "{{ vm_full_immutable_attempt_config.network }}"
+        state: "{{ vm_full_immutable_attempt_config.state }}"
+      register: vm999_immutable_attempt
+
+    - name: Assert existing disk and EFI disk are not changed
+      ansible.builtin.assert:
+        that:
+          - vm999_immutable_attempt is not changed
+
+    - name: Verify VM 999 disk and EFI disk remain unchanged
+      ansible.proxmox.proxmox_vm_info:
+        api_host: "{{ api_host }}"
+        node: "{{ proxmox_node }}"
+        vmid: "{{ vmid_full }}"
+      register: vm999_immutable_info
+
+    - name: Assert original disk and EFI disk are preserved
+      ansible.builtin.assert:
+        that:
+          - "'size=32G' in vm999_immutable_info.vms[0].scsi0"
+          - "'local-lvm:' in vm999_immutable_info.vms[0].efidisk0"
+          - "'efitype=4m' in vm999_immutable_info.vms[0].efidisk0"
+
+    - name: Change VM 999 network settings
+      ansible.proxmox.proxmox_vm: &vm_full_network_update_args
+        node: "{{ vm_full_network_update_config.node }}"
+        vmid: "{{ vm_full_network_update_config.vmid }}"
+        name: "{{ vm_full_network_update_config.name }}"
+        memory: "{{ vm_full_network_update_config.memory }}"
+        cores: "{{ vm_full_network_update_config.cores }}"
+        sockets: "{{ vm_full_network_update_config.sockets }}"
+        cpu: "{{ vm_full_network_update_config.cpu }}"
+        machine: "{{ vm_full_network_update_config.machine }}"
+        ostype: "{{ vm_full_network_update_config.ostype }}"
+        bios: "{{ vm_full_network_update_config.bios }}"
+        efidisk: "{{ vm_full_network_update_config.efidisk }}"
+        vga: "{{ vm_full_network_update_config.vga }}"
+        ide2: "{{ vm_full_network_update_config.ide2 }}"
+        scsihw: "{{ vm_full_network_update_config.scsihw }}"
+        network: "{{ vm_full_network_update_config.network }}"
+        disk: "{{ vm_full_network_update_config.disk }}"
+        state: "{{ vm_full_network_update_config.state }}"
+      register: vm999_network_update
+
+    - name: Assert VM 999 network update changed the VM
+      ansible.builtin.assert:
+        that:
+          - vm999_network_update is changed
+
+    - name: Get VM 999 configuration after network update
+      ansible.proxmox.proxmox_vm_info:
+        api_host: "{{ api_host }}"
+        node: "{{ proxmox_node }}"
+        vmid: "{{ vmid_full }}"
+      register: vm999_network_info
+
+    - name: Assert VM 999 network changes
+      ansible.builtin.assert:
+        that:
+          - "'tag=105' in vm999_network_info.vms[0].net0"
+          - "'firewall=0' in vm999_network_info.vms[0].net0"
+          - "'tag=106' in vm999_network_info.vms[0].net1"
+
+    - name: Reapply VM 999 network settings idempotently
+      ansible.proxmox.proxmox_vm: *vm_full_network_update_args
+      register: vm999_network_again
+
+    - name: Assert VM 999 network settings are idempotent
+      ansible.builtin.assert:
+        that:
+          - vm999_network_again is not changed
+
+    - name: Create VM 1000 with only its name and VMID configured
+      ansible.proxmox.proxmox_vm: &vm_defaults_args
+        api_host: "{{ api_host }}"
+        node: "{{ vm_defaults_config.node }}"
+        vmid: "{{ vm_defaults_config.vmid }}"
+        name: "{{ vm_defaults_config.name }}"
+        state: "{{ vm_defaults_config.state }}"
+      register: vm1000_create
+
+    - name: Assert VM 1000 was created
+      ansible.builtin.assert:
+        that:
+          - vm1000_create is changed
+
+    - name: Get VM 1000 configuration after creation
+      ansible.proxmox.proxmox_vm_info:
+        api_host: "{{ api_host }}"
+        node: "{{ proxmox_node }}"
+        vmid: "{{ vmid_defaults }}"
+      register: vm1000_info
+
+    - name: Assert VM 1000 initial configuration
+      ansible.builtin.assert:
+        that:
+          - vm1000_info is not changed
+          - vm1000_info.vms | length == 1
+          - vm1000_info.vms[0].name == vm_defaults_config.name
+
+    - name: Create VM 1000 idempotently
+      ansible.proxmox.proxmox_vm: *vm_defaults_args
+      register: vm1000_create_again
+
+    - name: Assert VM 1000 initial creation is idempotent
+      ansible.builtin.assert:
+        that:
+          - vm1000_create_again is not changed
+
+    - name: Attempt OVMF update without required EFI disk settings
+      ansible.proxmox.proxmox_vm: &vm_defaults_update_args
+        node: "{{ vm_defaults_update_config.node }}"
+        vmid: "{{ vm_defaults_update_config.vmid }}"
+        name: "{{ vm_defaults_update_config.name }}"
+        memory: "{{ vm_defaults_update_config.memory }}"
+        cores: "{{ vm_defaults_update_config.cores }}"
+        sockets: "{{ vm_defaults_update_config.sockets }}"
+        cpu: "{{ vm_defaults_update_config.cpu }}"
+        machine: "{{ vm_defaults_update_config.machine }}"
+        ostype: "{{ vm_defaults_update_config.ostype }}"
+        bios: "{{ vm_defaults_update_config.bios }}"
+        vga: "{{ vm_defaults_update_config.vga }}"
+        scsihw: "{{ vm_defaults_update_config.scsihw }}"
+        ide2: "{{ vm_defaults_update_config.ide2 }}"
+        network: "{{ vm_defaults_update_config.network }}"
+        state: "{{ vm_defaults_update_config.state }}"
+      register: vm1000_update_without_efidisk
+      ignore_errors: true
+
+    - name: Assert OVMF update requires EFI disk settings
+      ansible.builtin.assert:
+        that:
+          - vm1000_update_without_efidisk is failed
+          - "'bios is ovmf' in vm1000_update_without_efidisk.msg"
+          - "'efidisk' in vm1000_update_without_efidisk.msg"
+
+    - name: Change VM 1000 defaults, machine, OS type, BIOS, and EFI disk
+      ansible.proxmox.proxmox_vm: &vm_defaults_update_with_efidisk_args
+        node: "{{ vm_defaults_update_with_efidisk_config.node }}"
+        vmid: "{{ vm_defaults_update_with_efidisk_config.vmid }}"
+        name: "{{ vm_defaults_update_with_efidisk_config.name }}"
+        memory: "{{ vm_defaults_update_with_efidisk_config.memory }}"
+        cores: "{{ vm_defaults_update_with_efidisk_config.cores }}"
+        sockets: "{{ vm_defaults_update_with_efidisk_config.sockets }}"
+        cpu: "{{ vm_defaults_update_with_efidisk_config.cpu }}"
+        machine: "{{ vm_defaults_update_with_efidisk_config.machine }}"
+        ostype: "{{ vm_defaults_update_with_efidisk_config.ostype }}"
+        bios: "{{ vm_defaults_update_with_efidisk_config.bios }}"
+        efidisk: "{{ vm_defaults_update_with_efidisk_config.efidisk }}"
+        vga: "{{ vm_defaults_update_with_efidisk_config.vga }}"
+        scsihw: "{{ vm_defaults_update_with_efidisk_config.scsihw }}"
+        ide2: "{{ vm_defaults_update_with_efidisk_config.ide2 }}"
+        network: "{{ vm_defaults_update_with_efidisk_config.network }}"
+        state: "{{ vm_defaults_update_with_efidisk_config.state }}"
+      register: vm1000_update
+
+    - name: Assert VM 1000 update changed the VM
+      ansible.builtin.assert:
+        that:
+          - vm1000_update is changed
+
+    - name: Get VM 1000 configuration after update
+      ansible.proxmox.proxmox_vm_info:
+        api_host: "{{ api_host }}"
+        node: "{{ proxmox_node }}"
+        vmid: "{{ vmid_defaults }}"
+      register: vm1000_updated_info
+
+    - name: Assert VM 1000 updated configuration
+      ansible.builtin.assert:
+        that:
+          - vm1000_updated_info.vms[0].memory | int == 1024
+          - vm1000_updated_info.vms[0].cores | int == 4
+          - vm1000_updated_info.vms[0].sockets | int == 2
+          - vm1000_updated_info.vms[0].cpu == vm_defaults_update_config.cpu
+          - vm1000_updated_info.vms[0].ostype == vm_defaults_update_config.ostype
+          - "'q35' in vm1000_updated_info.vms[0].machine"
+          - vm1000_updated_info.vms[0].bios == 'ovmf'
+          - "'efidisk0' in vm1000_updated_info.vms[0]"
+          - "'local-lvm:' in vm1000_updated_info.vms[0].efidisk0"
+          - "'efitype=4m' in vm1000_updated_info.vms[0].efidisk0"
+          - "'pre-enrolled-keys=1' in vm1000_updated_info.vms[0].efidisk0"
+          - vm1000_updated_info.vms[0].vga == vm_defaults_update_config.vga
+          - vm1000_updated_info.vms[0].scsihw == vm_defaults_update_config.scsihw
+          - vm1000_updated_info.vms[0].ide2 == 'none,media=cdrom'
+          - "'virtio=' in vm1000_updated_info.vms[0].net0"
+          - "'bridge=vmbr0' in vm1000_updated_info.vms[0].net0"
+          - "'firewall=0' in vm1000_updated_info.vms[0].net0"
+          - "'tag=105' in vm1000_updated_info.vms[0].net0"
+
+    - name: Reapply VM 1000 update idempotently
+      ansible.proxmox.proxmox_vm: *vm_defaults_update_with_efidisk_args
+      register: vm1000_update_again
+
+    - name: Assert VM 1000 update is idempotent
+      ansible.builtin.assert:
+        that:
+          - vm1000_update_again is not changed
+
+    - name: Predict VM 999 removal in check mode
+      ansible.proxmox.proxmox_vm:
+        api_host: "{{ api_host }}"
+        node: "{{ proxmox_node }}"
+        vmid: "{{ vmid_full }}"
+        state: absent
+      check_mode: true
+      register: vm999_remove_check
+
+    - name: Assert VM 999 check-mode removal is predicted
+      ansible.builtin.assert:
+        that:
+          - vm999_remove_check is changed
+
+    - name: Verify check mode retained VM 999
+      ansible.proxmox.proxmox_vm_info:
+        api_host: "{{ api_host }}"
+        node: "{{ proxmox_node }}"
+        vmid: "{{ vmid_full }}"
+      register: vm999_after_remove_check
+
+    - name: Assert VM 999 still exists after check mode
+      ansible.builtin.assert:
+        that:
+          - vm999_after_remove_check.vms | length == 1
+
+    - name: Remove VM 999
+      ansible.proxmox.proxmox_vm:
+        api_host: "{{ api_host }}"
+        node: "{{ proxmox_node }}"
+        vmid: "{{ vmid_full }}"
+        state: absent
+      register: vm999_remove
+
+    - name: Assert VM 999 removal changed the VM
+      ansible.builtin.assert:
+        that:
+          - vm999_remove is changed
+
+    - name: Get VM 999 state after removal
+      ansible.proxmox.proxmox_vm_info:
+        api_host: "{{ api_host }}"
+        node: "{{ proxmox_node }}"
+        vmid: "{{ vmid_full }}"
+      register: vm999_removed_info
+
+    - name: Remove VM 999 idempotently
+      ansible.proxmox.proxmox_vm:
+        api_host: "{{ api_host }}"
+        node: "{{ proxmox_node }}"
+        vmid: "{{ vmid_full }}"
+        state: absent
+      register: vm999_remove_again
+
+    - name: Assert VM 999 removal is idempotent
+      ansible.builtin.assert:
+        that:
+          - vm999_remove_again is not changed
+
+    - name: Predict VM 1000 removal in check mode
+      ansible.proxmox.proxmox_vm:
+        api_host: "{{ api_host }}"
+        node: "{{ proxmox_node }}"
+        vmid: "{{ vmid_defaults }}"
+        state: absent
+      check_mode: true
+      register: vm1000_remove_check
+
+    - name: Assert VM 1000 check-mode removal is predicted
+      ansible.builtin.assert:
+        that:
+          - vm1000_remove_check is changed
+
+    - name: Verify check mode retained VM 1000
+      ansible.proxmox.proxmox_vm_info:
+        api_host: "{{ api_host }}"
+        node: "{{ proxmox_node }}"
+        vmid: "{{ vmid_defaults }}"
+      register: vm1000_after_remove_check
+
+    - name: Assert VM 1000 still exists after check mode
+      ansible.builtin.assert:
+        that:
+          - vm1000_after_remove_check.vms | length == 1
+
+    - name: Remove VM 1000
+      ansible.proxmox.proxmox_vm:
+        api_host: "{{ api_host }}"
+        node: "{{ proxmox_node }}"
+        vmid: "{{ vmid_defaults }}"
+        state: absent
+      register: vm1000_remove
+
+    - name: Assert VM 1000 removal changed the VM
+      ansible.builtin.assert:
+        that:
+          - vm1000_remove is changed
+
+    - name: Get VM 1000 state after removal
+      ansible.proxmox.proxmox_vm_info:
+        api_host: "{{ api_host }}"
+        node: "{{ proxmox_node }}"
+        vmid: "{{ vmid_defaults }}"
+      register: vm1000_removed_info
+
+    - name: Remove VM 1000 idempotently
+      ansible.proxmox.proxmox_vm:
+        api_host: "{{ api_host }}"
+        node: "{{ proxmox_node }}"
+        vmid: "{{ vmid_defaults }}"
+        state: absent
+      register: vm1000_remove_again
+
+    - name: Assert VM 1000 removal is idempotent
+      ansible.builtin.assert:
+        that:
+          - vm1000_remove_again is not changed
+
+  always:
+    - name: Ensure VM 999 is removed after test completion
+      ansible.proxmox.proxmox_vm:
+        api_host: "{{ api_host }}"
+        node: "{{ proxmox_node }}"
+        vmid: "{{ vmid_full }}"
+        state: absent
+      failed_when: false
+
+    - name: Ensure VM 1000 is removed after test completion
+      ansible.proxmox.proxmox_vm:
+        api_host: "{{ api_host }}"
+        node: "{{ proxmox_node }}"
+        vmid: "{{ vmid_defaults }}"
+        state: absent
+      failed_when: false
