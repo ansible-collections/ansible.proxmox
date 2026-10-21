@@ -43,5 +43,3 @@ template = template.replace(
 )
 Path(sys.argv[2]).write_text(template, encoding="utf-8")
 PY
-
-
