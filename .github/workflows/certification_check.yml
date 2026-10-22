@@ -1,0 +1,16 @@
+---
+name: Run collection certification checks
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: cert-ver-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  certification_check:
+    uses: ansible-collections/partner-certification-checker/.github/workflows/certification-reusable.yml@aabe637cfd1ee42305a0123e5ef4312b12ed4cff # v3.0.1

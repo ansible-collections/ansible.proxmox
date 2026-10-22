@@ -1,0 +1,66 @@
+---
+# Sanity tests for ansible.proxmox collection
+#
+# https://docs.ansible.com/projects/ansible/latest/dev_guide/testing_sanity.html
+#
+# Checks style, documentation, and imports across all supported ansible-core versions.
+# Add new versions from https://github.com/ansible-collections/news-for-maintainers
+# and drop EOL versions in a timely manner.
+
+name: Sanity
+on:
+  push:
+    branches:
+      - main
+      - stable-*
+  pull_request:
+  schedule:
+    # Run daily at 06:00 UTC to catch issues from new ansible-test releases
+    - cron: '0 6 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: >-
+    ${{ github.workflow }}-${{
+      github.event.pull_request.number || github.sha
+    }}
+  cancel-in-progress: true
+
+jobs:
+
+  sanity:
+    name: Sanity (Ⓐ${{ matrix.ansible }})
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        ansible:
+          - stable-2.19
+          - stable-2.20
+          - stable-2.21
+          - stable-2.22
+          - devel
+        # - milestone
+
+    steps:
+      - name: Perform sanity testing
+        uses: ansible-community/ansible-test-gh-action@release/v1
+        with:
+          ansible-core-version: ${{ matrix.ansible }}
+          testing-type: sanity
+          pull-request-change-detection: false
+          # codecov-token: ${{ secrets.CODECOV_TOKEN }}
+          # test-deps: >-
+          #   ansible.netcommon
+
+  check:  # Branch-protection aggregator — passes when all matrix legs pass
+    if: always()
+    needs:
+      - sanity
+    runs-on: ubuntu-latest
+    steps:
+      - name: Decide whether the needed jobs succeeded or failed
+        uses: re-actors/alls-green@release/v1
+        with:
+          jobs: ${{ toJSON(needs) }}

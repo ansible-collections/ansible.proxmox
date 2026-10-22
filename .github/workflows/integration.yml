@@ -1,0 +1,145 @@
+---
+name: Integration
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 0'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: proxmox-integration
+  cancel-in-progress: false
+
+jobs:
+  approve:
+    name: Approve Integration
+    runs-on: ubuntu-latest
+    environment: eco-proxmox-protected
+    if: >-
+      github.actor != 'pre-commit-ci[bot]' &&
+      github.event_name == 'pull_request_target'
+    steps:
+      - name: Confirm approval
+        run: echo "Integration approved"
+
+  integration:
+    name: "Integration (${{ matrix.ansible_version }})"
+    runs-on: [self-hosted, proxmox]
+    needs:
+      - approve
+    if: >-
+      always() && github.actor != 'pre-commit-ci[bot]' &&
+      (needs.approve.result == 'success' ||
+       github.event_name == 'schedule' ||
+        github.event_name == 'workflow_dispatch')
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        ansible_version:
+          - stable-2.16
+          - stable-2.18
+          - stable-2.20
+          - stable-2.21
+    defaults:
+      run:
+        shell: bash
+        working-directory: ansible_collections/ansible/proxmox
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          path: ansible_collections/ansible/proxmox
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          allow-unsafe-pr-checkout: true
+
+      - name: Install ansible-core (${{ matrix.ansible_version }})
+        env:
+          ANSIBLE_VERSION: ${{ matrix.ansible_version }}
+        run: |
+          set -euo pipefail
+          rm -rf ~/venv-proxmox
+          python3.12 -m venv ~/venv-proxmox
+          source ~/venv-proxmox/bin/activate
+          python -m pip install "git+https://github.com/ansible/ansible.git@${ANSIBLE_VERSION}"
+
+      - name: Install collection dependencies
+        run: |
+          source ~/venv-proxmox/bin/activate
+          python -m pip install -r tests/integration/requirements.txt
+
+      - name: Generate integration config
+        run: |
+          source ~/venv-proxmox/bin/activate
+          make generate-integration-config
+        env:
+          PROXMOX_HOST: ${{ secrets.PROXMOX_HOST }}
+          PROXMOX_TOKEN_ID: ${{ secrets.PROXMOX_TOKEN_ID }}
+          PROXMOX_TOKEN_SECRET: ${{ secrets.PROXMOX_TOKEN_SECRET }}
+          PROXMOX_USER: ${{ secrets.PROXMOX_USER }}
+          PROXMOX_VALIDATE_CERTS: ${{ secrets.PROXMOX_VALIDATE_CERTS }}
+
+      - name: List integration targets
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.event.pull_request.base.ref || github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          source ~/venv-proxmox/bin/activate
+          if [[ "${EVENT_NAME}" == 'pull_request_target' ]]; then
+            git fetch origin "${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+            git branch -f "${BASE_REF}" "origin/${BASE_REF}"
+            ansible-test integration --list-targets --changed \
+              --base-branch "${BASE_REF}" > targets.txt
+          else
+            ansible-test integration --list-targets > targets.txt
+          fi
+          if [[ "${EVENT_NAME}" == 'schedule' && ! -s targets.txt ]]; then
+            echo "::error::Scheduled integration run discovered no targets."
+            exit 1
+          fi
+          cat targets.txt
+
+      - name: Run integration tests
+        env:
+          ANSIBLE_COLLECTIONS_PATH: ${{ github.workspace }}
+          ANSIBLE_VERSION: ${{ matrix.ansible_version }}
+        run: |
+          set -euo pipefail
+          source ~/venv-proxmox/bin/activate
+          mapfile -t targets < targets.txt
+          if (( ${#targets[@]} == 0 )); then
+            echo "No integration targets selected."
+            exit 0
+          fi
+          make integration \
+            ANSIBLE_CORE_SPEC="git+https://github.com/ansible/ansible.git@${ANSIBLE_VERSION}" \
+            INTEGRATION_TARGETS="${targets[*]}" \
+            CLI_ARGS="-v --color"
+
+      - name: Clean integration files
+        if: always()
+        run: |
+          rm -rf ~/venv-proxmox
+          rm -f tests/integration/integration_config.yml targets.txt
+
+  check:
+    if: always() && github.actor != 'pre-commit-ci[bot]'
+    needs:
+      - approve
+      - integration
+    runs-on: ubuntu-latest
+    steps:
+      - name: Decide whether the needed jobs succeeded or failed
+        uses: re-actors/alls-green@release/v1
+        with:
+          allowed-skips: >-
+            ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'approve' || '' }}
+          jobs: ${{ toJSON(needs) }}

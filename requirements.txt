@@ -1,0 +1,4 @@
+# Python dependencies required by collection modules on the Ansible controller.
+proxmoxer>=2.3.0
+requests
+openssh_wrapper
