@@ -22,6 +22,8 @@ jobs:
     environment: eco-proxmox-protected
     if: >-
       github.actor != 'pre-commit-ci[bot]' &&
+      github.actor != 'dependabot[bot]' &&
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
       github.event_name == 'pull_request_target'
     steps:
       - name: Confirm approval
@@ -34,6 +36,8 @@ jobs:
       - approve
     if: >-
       always() && github.actor != 'pre-commit-ci[bot]' &&
+      github.actor != 'dependabot[bot]' &&
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
       (needs.approve.result == 'success' ||
        github.event_name == 'schedule' ||
         github.event_name == 'workflow_dispatch')
@@ -90,12 +94,14 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           BASE_REF: ${{ github.event.pull_request.base.ref || github.event.repository.default_branch }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
           source ~/venv-proxmox/bin/activate
           if [[ "${EVENT_NAME}" == 'pull_request_target' ]]; then
             git fetch origin "${BASE_REF}:refs/remotes/origin/${BASE_REF}"
             git branch -f "${BASE_REF}" "origin/${BASE_REF}"
+            git checkout -B "integration-pr-${PR_NUMBER}" HEAD
             ansible-test integration --list-targets --changed \
               --base-branch "${BASE_REF}" > targets.txt
           else
@@ -131,7 +137,10 @@ jobs:
           rm -f tests/integration/integration_config.yml targets.txt
 
   check:
-    if: always() && github.actor != 'pre-commit-ci[bot]'
+    if: >-
+      always() && github.actor != 'pre-commit-ci[bot]' &&
+      github.actor != 'dependabot[bot]' &&
+      github.event.pull_request.user.login != 'dependabot[bot]'
     needs:
       - approve
       - integration
