@@ -1,153 +1,112 @@
-# collection_template
-You can build a new repository for an Ansible Collection using this template by following [Creating a repository from a template](https://help.github.com/en/github/creating-cloning-and-archiving-repositories/creating-a-repository-from-a-template). This README.md contains recommended headings for your collection README.md, with comments describing what each section should contain. Once you have created your collection repository, delete this paragraph and the title above it from your README.md.
+# Ansible Proxmox Collection
 
-# Foo Collection for Ansible
-<!-- Add CI and code coverage badges here. Samples included below. -->
-[![CI](https://github.com/ansible-collections/REPONAMEHERE/workflows/CI/badge.svg?event=push)](https://github.com/ansible-collections/REPONAMEHERE/actions) [![Codecov](https://img.shields.io/codecov/c/github/ansible-collections/REPONAMEHERE)](https://codecov.io/gh/ansible-collections/REPONAMEHERE)
+The `ansible.proxmox` collection provides Ansible modules for Proxmox VE (PVE)
+and Proxmox Backup Server (PBS). Its shared connection layer supports HTTPS
+with password or API-token authentication, and OpenSSH using the configured
+SSH agent or identity.
 
-<!-- Describe the collection and why a user would want to use it. What does the collection do? -->
+## Requirements
 
-## Our mission
+Install these Python packages in the environment used by Ansible on the
+controller:
 
-<!-- Put your collection's mission statement in here. Example follows. -->
-
-At the `your collection name`, our mission is to produce and maintain simple, flexible,
-and powerful open-source software tailored to `your collection purpose`.
-
-We welcome members from all skill levels to participate actively in our open, inclusive, and vibrant community.
-Whether you are an expert or just beginning your journey with Ansible and `your collection name`,
-you are encouraged to contribute, share insights, and collaborate with fellow enthusiasts!
-
-## Community standards
-
-This project abides by the following policies:
-
-* [Ansible Code of Conduct](https://docs.ansible.com/projects/ansible/devel/community/code_of_conduct.html)
-* [Ansible Community Policy for AI-Assisted Contributions](https://docs.ansible.com/projects/ansible/devel/community/ai_policy.html)
-
-## Communication
-
-<!--
-If your collection is not present on the Ansible forum yet, please check out the existing [tags](https://forum.ansible.com/tags) and [groups](https://forum.ansible.com/g) - use what suits your collection. If there is no appropriate tag and group yet, please [request one](https://forum.ansible.com/t/requesting-a-forum-group/503/17).
--->
-
-* Join the Ansible forum:
-  * [Get Help](https://forum.ansible.com/c/help/6): get help or help others. Please add appropriate tags if you start new discussions, for example the `YOUR TAG` tag.
-  * [Posts tagged with 'your tag'](https://forum.ansible.com/tag/YOUR_TAG): subscribe to participate in collection/technology-related conversations.
-  * [Refer to your forum group here if exists](https://forum.ansible.com/g/): by joining the team you will automatically get subscribed to the posts tagged with [your group forum tag here](https://forum.ansible.com/tags).
-  * [Social Spaces](https://forum.ansible.com/c/chat/4): gather and interact with fellow enthusiasts.
-  * [News & Announcements](https://forum.ansible.com/c/news/5): track project-wide announcements including social events. The [Bullhorn newsletter](https://docs.ansible.com/projects/ansible/devel/community/communication.html#the-bullhorn), which is used to announce releases and important changes, can also be found here.
-
-For more information about communication, see the [Ansible communication guide](https://docs.ansible.com/projects/ansible/devel/community/communication.html).
-
-## Contributing to this collection
-
-<!--Describe how the community can contribute to your collection. At a minimum, fill up and include the CONTRIBUTING.md file containing how and where users can create issues to report problems or request features for this collection. List contribution requirements, including preferred workflows and necessary testing, so you can benefit from community PRs. If you are following general Ansible contributor guidelines, you can link to - [Ansible Community Guide](https://docs.ansible.com/projects/ansible/devel/community/index.html). List the current maintainers (contributors with write or higher access to the repository). The following can be included:-->
-
-The content of this collection is made by people like you, a community of individuals collaborating on making the world better through developing automation software.
-
-We are actively accepting new contributors and all types of contributions are very welcome.
-
-Don't know how to start? Refer to the [Ansible community guide](https://docs.ansible.com/projects/ansible/devel/community/index.html)!
-
-Want to submit code changes? Take a look at the [Quick-start development guide](https://docs.ansible.com/projects/ansible/devel/community/create_pr_quick_start.html).
-
-We also use the following guidelines:
-
-* [Collection review checklist](https://docs.ansible.com/projects/ansible/devel/community/collection_contributors/collection_reviewing.html)
-* [Ansible development guide](https://docs.ansible.com/projects/ansible/devel/dev_guide/index.html)
-* [Ansible collection development guide](https://docs.ansible.com/projects/ansible/devel/dev_guide/developing_collections.html#contributing-to-collections)
-
-## Collection maintenance
-
-The current maintainers are listed in the [MAINTAINERS](MAINTAINERS) file. If you have questions or need help, feel free to mention them in the proposals.
-
-To learn how to maintain/become a maintainer of this collection, refer to the [Maintainer guidelines](https://docs.ansible.com/projects/ansible/devel/community/maintainers.html).
-
-It is necessary for maintainers of this collection to be subscribed to:
-
-* The collection itself (the `Watch` button -> `All Activity` in the upper right corner of the repository's homepage).
-* The [news-for-maintainers repository](https://github.com/ansible-collections/news-for-maintainers).
-
-They also should be subscribed to Ansible's [The Bullhorn newsletter](https://docs.ansible.com/projects/ansible/devel/community/communication.html#the-bullhorn).
-
-## Governance
-
-<!--Describe how the collection is governed. Here can be the following text:-->
-
-The process of decision making in this collection is based on discussing and finding consensus among participants.
-
-Every voice is important. If you have something on your mind, create an issue or dedicated discussion and let's discuss it!
-
-## Tested with Ansible
-
-<!-- List the versions of Ansible the collection has been tested with. Must match what is in galaxy.yml. -->
-
-## External requirements
-
-<!-- List any external resources the collection depends on, for example minimum versions of an OS, libraries, or utilities. Do not list other Ansible collections here. -->
-
-### Supported connections
-<!-- Optional. If your collection supports only specific connection types (such as HTTPAPI, netconf, or others), list them here. -->
-
-## Included content
-
-<!-- Galaxy now usually displays full module and plugin docs within the UI. If you don't use Galaxy for your collection, you may need to either describe your plugins etc here, or point to an external docsite to cover that information. -->
-
-## Using this collection
-
-<!--Include some quick examples that cover the most common use cases for your collection content. It can include the following examples of installation and upgrade (change NAMESPACE.COLLECTION_NAME correspondingly):-->
-
-### Installing the Collection from Ansible Galaxy
-
-Before using this collection, you need to install it with the Ansible Galaxy command-line tool:
 ```bash
-ansible-galaxy collection install NAMESPACE.COLLECTION_NAME
+python -m pip install -r requirements.txt
 ```
 
-You can also include it in a `requirements.yml` file and install it with `ansible-galaxy collection install -r requirements.yml`, using the format:
+OpenSSH connections also require an OpenSSH client executable. The collection's
+execution-environment metadata declares the Python and system package
+dependencies.
+
+Installing the collection with `ansible-galaxy` does not install Python packages.
+Install `requirements.txt` in the controller environment, or build an execution
+environment with `ansible-builder` to install the dependencies declared under
+`meta/`.
+
+## Install from a checkout
+
+Build and install the collection archive:
+
+```bash
+ansible-galaxy collection build
+ansible-galaxy collection install ansible-proxmox-1.0.0.tar.gz
+```
+
+## Test a connection
+
+The `proxmox_connection_test` module retrieves the API version, which verifies
+that the selected service, transport, and credentials work:
+
 ```yaml
 ---
-collections:
-  - name: NAMESPACE.COLLECTION_NAME
+- name: Test Proxmox API access
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Test PVE over HTTPS with an API token
+      ansible.proxmox.proxmox_connection_test:
+        api_host: "{{ proxmox_api_host }}"
+        api_user: "{{ proxmox_api_user }}"
+        api_token_id: "{{ proxmox_api_token_id }}"
+        api_token_secret: "{{ proxmox_api_token_secret }}"
+        api_service: PVE
+        api_backend: https
+        validate_certs: true
+      register: proxmox_connection
+
+    - name: Display the API version
+      ansible.builtin.debug:
+        var: proxmox_connection.version
 ```
 
-Note that if you install the collection from Ansible Galaxy, it will not be upgraded automatically when you upgrade the `ansible` package. To upgrade the collection to the latest available version, run the following command:
+For a private CA, provide `ca_path`. Keep credentials in Ansible Vault or a
+secret manager. HTTPS password authentication uses `api_password` instead of
+the token fields. For OpenSSH, set `api_backend: openssh` and configure the SSH
+agent or identity file, and set `ssh_user` to the SSH login. `api_user`
+remains the HTTPS account name, so both identities can be configured in shared
+defaults without changing between variable names.
+
+Use `api_port` (or `PROXMOX_PORT`) to override the HTTPS port and
+`ssh_port` (or `PROXMOX_SSH_PORT`) to override the SSH port. If omitted,
+the HTTPS backend uses the service default (PVE: 8006, PBS: 8007) and OpenSSH
+uses port 22.
+
+Connection options can be shared with `module_defaults` under the
+`group/ansible.proxmox.proxmox` action group. Backend-specific defaults can be
+scoped to a block when a play uses more than one transport.
+
+## Development checks
+
+Install local development and test dependencies with:
+
 ```bash
-ansible-galaxy collection install NAMESPACE.COLLECTION_NAME --upgrade
+python -m pip install -r tests/unit/requirements.txt
 ```
 
-You can also install a specific version of the collection, for example, if you need to downgrade when something is broken in the latest version (please report an issue in this repository). Use the following syntax to install version `0.1.0`:
+Run the collection checks from its collection layout with:
 
 ```bash
-ansible-galaxy collection install NAMESPACE.COLLECTION_NAME:==0.1.0
+ansible-test sanity
+ansible-test units
+ansible-test integration proxmox_module_utils
 ```
 
-See [using Ansible collections](https://docs.ansible.com/projects/ansible/devel/user_guide/collections_using.html) for more details.
+Live integration tests load credentials and environment details from
+`tests/integration/integration_config.yml`. Generate it from environment
+variables before running a Proxmox integration target:
 
-## Release notes
+```bash
+PROXMOX_HOST=pve.example.test \
+PROXMOX_USER=root@pam \
+PROXMOX_PASSWORD=secret \
+tests/integration/generate_integration_config.sh
+ansible-test integration proxmox_vm --allow-unsupported
+```
 
-See the [changelog](https://github.com/ansible-collections/REPONAMEHERE/tree/main/CHANGELOG.rst).
+The `proxmox_dummy_resource` module in `plugins/modules/` is a development
+example used by the non-networked integration target. It is not intended as a
+production Proxmox resource module.
 
-## Roadmap
+## License
 
-<!-- Optional. Include the roadmap for this collection, and the proposed release/versioning strategy so users can anticipate the upgrade/update cycle. -->
-
-## More information
-
-<!-- List out where the user can find additional information, such as working group meeting times, slack/IRC channels, or documentation for the product this collection automates. At a minimum, link to: -->
-
-- [Ansible user guide](https://docs.ansible.com/projects/ansible/devel/user_guide/index.html)
-- [Ansible developer guide](https://docs.ansible.com/projects/ansible/devel/dev_guide/index.html)
-- [Ansible collections requirements](https://docs.ansible.com/projects/ansible/devel/community/collection_contributors/collection_requirements.html)
-- [Ansible community Code of Conduct](https://docs.ansible.com/projects/ansible/devel/community/code_of_conduct.html)
-- [The Bullhorn (the Ansible contributor newsletter)](https://docs.ansible.com/projects/ansible/devel/community/communication.html#the-bullhorn)
-- [Important announcements for maintainers](https://github.com/ansible-collections/news-for-maintainers)
-
-## Licensing
-
-<!-- Include the appropriate license information here and a pointer to the full licensing details. If the collection contains modules migrated from the ansible/ansible repo, you must use the same license that existed in the ansible/ansible repo. See the GNU license example below. -->
-
-GNU General Public License v3.0 or later.
-
-See [LICENSE](https://www.gnu.org/licenses/gpl-3.0.txt) to see the full text.
+GNU General Public License v3.0 or later. See [LICENSE](LICENSE).
