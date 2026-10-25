@@ -15,7 +15,6 @@ description:
   - Retrieves virtual machine information from a Proxmox VE node.
   - When I(vmid) is omitted, information for every VM on the node is returned.
   - When I(vmid) is provided, the VM configuration is returned.
-  - Requires the C(Administrator) role propagated on C(/vms) to prevent incomplete results.
 version_added: "1.0.0"
 author:
   - Steve Fulmer (@stevefulme1)

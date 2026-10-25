@@ -10,4 +10,3 @@
 # to learn how to test your configuration.
 # Do not delete this file even if the collection has no dependencies!
 openssh-clients [platform:rpm]
-openssh-client [platform:deb]
