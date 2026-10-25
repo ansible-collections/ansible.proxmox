@@ -36,7 +36,7 @@ notes:
   - Explicit module parameters take precedence over their corresponding environment variables.
   - Modules require the configured identity to have the C(Administrator) role propagated.
   - HTTPS authentication requires either O(api_password), or both O(api_token_id) and O(api_token_secret).
-  - SSH authentication requires O(ssh_user) and an OpenSSH key, agent, or O(ssh_password).
+  - SSH authentication requires O(ssh_user) and an OpenSSH key or agent.
 author:
   - Ansible Eco Content Team (@eco-ansible-content)
 requirements:

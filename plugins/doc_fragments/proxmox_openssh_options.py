@@ -17,11 +17,6 @@ options:
       - SSH login name used when C(api_backend=openssh).
       - Uses the E(PROXMOX_SSH_USER) environment variable when omitted.
     type: str
-  ssh_password:
-    description:
-      - Password used to authenticate the SSH connection when C(api_backend=openssh).
-      - Uses the E(PROXMOX_SSH_PASSWORD) environment variable when omitted.
-    type: str
   ssh_port:
     description:
       - SSH port used when C(api_backend=openssh).

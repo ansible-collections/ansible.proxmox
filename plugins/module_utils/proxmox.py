@@ -48,11 +48,6 @@ def proxmox_argument_spec(argument_spec=None):
             "type": "str",
             "fallback": (env_fallback, ["PROXMOX_SSH_USER"]),
         },
-        "ssh_password": {
-            "type": "str",
-            "no_log": True,
-            "fallback": (env_fallback, ["PROXMOX_SSH_PASSWORD"]),
-        },
         "api_password": {
             "type": "str",
             "no_log": True,
@@ -263,8 +258,7 @@ class ProxmoxClient:
         if params.get("ca_path") and not params["validate_certs"]:
             self._fail("ca_path requires validate_certs=true")
         if (
-            params.get("ssh_password")
-            or params.get("ssh_config_file")
+            params.get("ssh_config_file")
             or params.get("ssh_identity_file")
             or params.get("ssh_forward_agent")
         ):
@@ -316,8 +310,6 @@ class ProxmoxClient:
             )
 
         options["user"] = user
-        if params.get("ssh_password"):
-            options["password"] = params["ssh_password"]
         if params.get("ssh_config_file"):
             options["config_file"] = params["ssh_config_file"]
         if params.get("ssh_identity_file"):

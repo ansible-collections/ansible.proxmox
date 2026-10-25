@@ -89,9 +89,9 @@ port, which otherwise defaults to 8006 for PVE or 8007 for PBS.
 
 OpenSSH is an alternative transport for VM operations. Set `api_backend` to
 `openssh` and provide `ssh_user`; `api_host`, `api_service`, and `api_timeout`
-retain their shared meanings. Authenticate with `ssh_password` (also available
-through `PROXMOX_SSH_PASSWORD`), or configure an SSH key or agent with
-`ssh_identity_file`, `ssh_config_file`, or `ssh_forward_agent`. `ssh_port`
+retain their shared meanings. Authenticate with an SSH key or agent using
+`ssh_identity_file`, `ssh_config_file`, or `ssh_forward_agent`. Password-based
+SSH authentication is not supported by proxmoxer's OpenSSH backend. `ssh_port`
 overrides the default port 22. HTTPS credentials, OTP, and CA settings are not
 used by this backend.
 
@@ -102,7 +102,7 @@ used by this backend.
     api_service: PVE
     api_backend: openssh
     ssh_user: root
-    ssh_password: "{{ vault_proxmox_ssh_password }}"
+    ssh_identity_file: "{{ proxmox_ssh_identity_file }}"
     node: pve01
 ```
 

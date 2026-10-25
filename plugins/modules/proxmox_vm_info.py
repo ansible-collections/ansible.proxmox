@@ -43,7 +43,7 @@ EXAMPLES = r"""
     api_host: proxmox.example.com
     api_user: root@pam
     api_password: secret
-    node: pve1
+    node: pve01
 
 - name: Retrieve one VM configuration
   ansible.proxmox.proxmox_vm_info:
@@ -51,7 +51,7 @@ EXAMPLES = r"""
     api_user: root@pam
     api_token_id: mytoken
     api_token_secret: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-    node: pve1
+    node: pve01
     vmid: 100
 """
 

@@ -222,10 +222,10 @@ EXAMPLES = r"""
 
 RETURN = r"""
 result:
-  description:
-    - VM data or the Proxmox task UPID returned by a create or delete operation.
+  description: VM data or the Proxmox task UPID returned by a create or delete operation.
   returned: always
   type: raw
+  sample: "UPID:pve01:003E0E8C:09394C3A:6ADF0AE7:qmcreate:102:ansible@pve!part:"
 """
 
 from ansible.module_utils.basic import AnsibleModule
