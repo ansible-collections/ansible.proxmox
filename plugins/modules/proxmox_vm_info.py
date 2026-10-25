@@ -34,14 +34,8 @@ options:
     required: false
 extends_documentation_fragment:
   - ansible.proxmox.proxmox_base
-  - ansible.proxmox.proxmox_connection_options
-  - ansible.proxmox.proxmox_auth_options
   - ansible.proxmox.proxmox_https_options
   - ansible.proxmox.proxmox_openssh_options
-attributes:
-  check_mode:
-    description: This module performs a read-only operation in check mode.
-    support: full
 """
 
 EXAMPLES = r"""

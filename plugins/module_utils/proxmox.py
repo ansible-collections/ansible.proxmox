@@ -48,6 +48,11 @@ def proxmox_argument_spec(argument_spec=None):
             "type": "str",
             "fallback": (env_fallback, ["PROXMOX_SSH_USER"]),
         },
+        "ssh_password": {
+            "type": "str",
+            "no_log": True,
+            "fallback": (env_fallback, ["PROXMOX_SSH_PASSWORD"]),
+        },
         "api_password": {
             "type": "str",
             "no_log": True,
@@ -241,8 +246,7 @@ class ProxmoxClient:
                 )
             )
 
-    def _https_options(self, params, options):
-        user = params.get("api_user")
+    def _validate_https_options(self, params):
         password = params.get("api_password")
         token_id = params.get("api_token_id")
         token_secret = params.get("api_token_secret")
@@ -259,11 +263,20 @@ class ProxmoxClient:
         if params.get("ca_path") and not params["validate_certs"]:
             self._fail("ca_path requires validate_certs=true")
         if (
-            params.get("ssh_config_file")
+            params.get("ssh_password")
+            or params.get("ssh_config_file")
             or params.get("ssh_identity_file")
             or params.get("ssh_forward_agent")
         ):
             self._fail("OpenSSH options cannot be used with the HTTPS backend")
+
+    def _https_options(self, params, options):
+        self._validate_https_options(params)
+        user = params.get("api_user")
+        password = params.get("api_password")
+        token_id = params.get("api_token_id")
+        token_secret = params.get("api_token_secret")
+        otp = params.get("api_otp")
 
         if token_id:
             user, token_name = self._token_identity(user, token_id)
@@ -303,6 +316,8 @@ class ProxmoxClient:
             )
 
         options["user"] = user
+        if params.get("ssh_password"):
+            options["password"] = params["ssh_password"]
         if params.get("ssh_config_file"):
             options["config_file"] = params["ssh_config_file"]
         if params.get("ssh_identity_file"):

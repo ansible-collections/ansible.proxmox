@@ -18,13 +18,13 @@ class ProxmoxResourceModule(ProxmoxBase):
     def create_resource(self):
         raise NotImplementedError("create_resource must be implemented")
 
-    def get_update_parameters(self, resource):
+    def get_update_parameters(self, _resource):
         return {}
 
-    def update_resource(self, resource, updates):
+    def update_resource(self, _resource, _updates):
         raise NotImplementedError("update_resource must be implemented")
 
-    def delete_resource(self, resource):
+    def delete_resource(self, _resource):
         raise NotImplementedError("delete_resource must be implemented")
 
     @staticmethod
@@ -51,24 +51,28 @@ class ProxmoxResourceModule(ProxmoxBase):
             fields.append("{0}={1}".format(option, value))
         return ",".join(fields)
 
+    def _formatted_entry_name(self, parent, entry, prefix):
+        if not isinstance(entry, dict) or "name" not in entry:
+            self.module.fail_json(
+                msg="Each {0} entry must be a mapping with a name such as {1}0.".format(parent, prefix)
+            )
+
+        api_parameter = entry["name"]
+        if prefix is None:
+            if api_parameter != parent:
+                self.module.fail_json(msg="{0} entry name must be {0}.".format(parent))
+        else:
+            suffix = api_parameter[len(prefix) :] if isinstance(api_parameter, str) else ""
+            if not isinstance(api_parameter, str) or not api_parameter.startswith(prefix) or not suffix.isdigit():
+                self.module.fail_json(
+                    msg="{0} entry name must use the {1}<index> format.".format(parent, prefix)
+                )
+        return api_parameter
+
     def _formatted_entries(self, parent, entries, prefix):
         seen = set()
         for entry in entries:
-            if not isinstance(entry, dict) or "name" not in entry:
-                self.module.fail_json(
-                    msg="Each {0} entry must be a mapping with a name such as {1}0.".format(parent, prefix)
-                )
-
-            api_parameter = entry["name"]
-            if prefix is None:
-                if api_parameter != parent:
-                    self.module.fail_json(msg="{0} entry name must be {0}.".format(parent))
-            else:
-                suffix = api_parameter[len(prefix) :] if isinstance(api_parameter, str) else ""
-                if not isinstance(api_parameter, str) or not api_parameter.startswith(prefix) or not suffix.isdigit():
-                    self.module.fail_json(
-                        msg="{0} entry name must use the {1}<index> format.".format(parent, prefix)
-                    )
+            api_parameter = self._formatted_entry_name(parent, entry, prefix)
             if api_parameter in seen:
                 self.module.fail_json(msg="Duplicate formatted API parameter {0}.".format(api_parameter))
             seen.add(api_parameter)
@@ -130,6 +134,84 @@ class ProxmoxResourceModule(ProxmoxBase):
             desired = "1" if desired else "0"
         return current is not None and str(current) == str(desired)
 
+    def _current_formatted_options(self, current_value, primary_field, fixed_options):
+        current_options = self._parse_formatted_options(current_value)
+        if primary_field and primary_field not in current_options and current_options:
+            primary_key = next(
+                (key for key, value in current_options.items() if value == ""),
+                None,
+            )
+            if primary_key is None:
+                primary_key = next(iter(current_options))
+            current_options.pop(primary_key)
+            current_options[primary_field] = primary_key
+        for option, option_value in fixed_options.items():
+            current_options.setdefault(option, option_value)
+        return current_options
+
+    def _scalar_formatted_update(self, parent, entries, resource, primary_field, fixed_options):
+        desired_options = {primary_field: entries} if primary_field else {"value": entries}
+        desired_options.update(fixed_options)
+        current_options = self._current_formatted_options(
+            resource.get(parent),
+            primary_field,
+            fixed_options,
+        )
+        if all(
+            self._formatted_values_equal(current_options.get(key), value)
+            for key, value in desired_options.items()
+        ):
+            return None
+        return self._serialize_formatted_options(desired_options, primary_field)
+
+    def _formatted_entry_update(self, api_parameter, desired_options, resource, primary_field, fixed_options):
+        current_options = self._current_formatted_options(
+            resource.get(api_parameter),
+            primary_field,
+            fixed_options,
+        )
+        requested_options = {
+            key: value
+            for key, value in fixed_options.items()
+            if value is not None
+        }
+        requested_options.update(
+            {key: value for key, value in desired_options.items() if value is not None}
+        )
+        if all(
+            self._formatted_values_equal(current_options.get(key), value)
+            for key, value in requested_options.items()
+        ):
+            return None
+
+        updated_options = dict(current_options)
+        updated_options.update(requested_options)
+        return self._serialize_formatted_options(updated_options, primary_field)
+
+    def _list_formatted_updates(self, parent, entries, resource, prefix, primary_field, fixed_options):
+        updates = {}
+        desired_names = set()
+        for api_parameter, desired_options in self._formatted_entries(parent, entries, prefix):
+            desired_names.add(api_parameter)
+            update = self._formatted_entry_update(
+                api_parameter,
+                desired_options,
+                resource,
+                primary_field,
+                fixed_options,
+            )
+            if update is not None:
+                updates[api_parameter] = update
+
+        if prefix is None:
+            return updates, []
+        current_names = {
+            key
+            for key in resource
+            if key.startswith(prefix) and key[len(prefix) :].isdigit()
+        }
+        return updates, sorted(current_names - desired_names)
+
     def get_formatted_parameter_updates(
         self,
         resource,
@@ -151,75 +233,31 @@ class ProxmoxResourceModule(ProxmoxBase):
                 continue
             if isinstance(entries, str):
                 primary_field = primary_fields.get(parent)
-                desired_options = {primary_field: entries} if primary_field else {"value": entries}
-                desired_options.update(fixed_options.get(parent, {}))
-                current_options = self._parse_formatted_options(resource.get(parent))
-                if primary_field and primary_field not in current_options and current_options:
-                    primary_key = next(
-                        (key for key, value in current_options.items() if value == ""),
-                        None,
-                    )
-                    if primary_key is None:
-                        primary_key = next(iter(current_options))
-                    current_options.pop(primary_key)
-                    current_options[primary_field] = primary_key
-                for key, value in fixed_options.get(parent, {}).items():
-                    current_options.setdefault(key, value)
-                if all(
-                    self._formatted_values_equal(current_options.get(key), value)
-                    for key, value in desired_options.items()
-                ):
-                    continue
-                updates[parent] = self._serialize_formatted_options(desired_options, primary_field)
+                update = self._scalar_formatted_update(
+                    parent,
+                    entries,
+                    resource,
+                    primary_field,
+                    fixed_options.get(parent, {}),
+                )
+                if update is not None:
+                    updates[parent] = update
                 continue
             if not isinstance(entries, list):
                 self.module.fail_json(msg="{0} must be a list.".format(parent))
 
             prefix = prefixes.get(parent, parent)
             primary_field = primary_fields.get(parent)
-            desired_names = set()
-            for api_parameter, desired_options in self._formatted_entries(parent, entries, prefix):
-                desired_names.add(api_parameter)
-                current_options = self._parse_formatted_options(resource.get(api_parameter))
-                if primary_field and primary_field not in current_options and current_options:
-                    primary_key = next(
-                        (key for key, value in current_options.items() if value == ""),
-                        None,
-                    )
-                    if primary_key is None:
-                        primary_key = next(iter(current_options))
-                    current_options.pop(primary_key)
-                    current_options[primary_field] = primary_key
-                for key, value in fixed_options.get(parent, {}).items():
-                    current_options.setdefault(key, value)
-                requested_options = {
-                    key: value
-                    for key, value in fixed_options.get(parent, {}).items()
-                    if value is not None
-                }
-                requested_options.update(
-                    {key: value for key, value in desired_options.items() if value is not None}
-                )
-                if all(
-                    self._formatted_values_equal(current_options.get(key), value)
-                    for key, value in requested_options.items()
-                ):
-                    continue
-
-                updated_options = dict(current_options)
-                updated_options.update(requested_options)
-                updates[api_parameter] = self._serialize_formatted_options(
-                    updated_options,
-                    primary_field,
-                )
-
-            if prefix is not None:
-                current_names = {
-                    key
-                    for key in resource
-                    if key.startswith(prefix) and key[len(prefix) :].isdigit()
-                }
-                deletions.extend(sorted(current_names - desired_names))
+            parent_updates, parent_deletions = self._list_formatted_updates(
+                parent,
+                entries,
+                resource,
+                prefix,
+                primary_field,
+                fixed_options.get(parent, {}),
+            )
+            updates.update(parent_updates)
+            deletions.extend(parent_deletions)
 
         if deletions:
             existing_deletions = [key for key in updates.get("delete", "").split(",") if key]

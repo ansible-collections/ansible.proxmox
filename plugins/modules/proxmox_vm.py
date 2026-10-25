@@ -155,14 +155,8 @@ options:
     default: present
 extends_documentation_fragment:
   - ansible.proxmox.proxmox_base
-  - ansible.proxmox.proxmox_connection_options
-  - ansible.proxmox.proxmox_auth_options
   - ansible.proxmox.proxmox_https_options
   - ansible.proxmox.proxmox_openssh_options
-attributes:
-  check_mode:
-    description: Check mode predicts the requested lifecycle operation.
-    support: full
 """
 
 EXAMPLES = r"""
@@ -205,6 +199,16 @@ EXAMPLES = r"""
         firewall: true
         tag: 106
     state: present
+
+- name: Create a default VM with https token
+  ansible.proxmox.proxmox_vm:
+    api_host: proxmox.example.com
+    api_user: root@pam
+    api_token_id: ansible_user_token
+    api_token_secret: "{{ vault_token_secret }}"
+    ca_path: /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
+    node: pve01
+    vmid: 200
 
 - name: Remove a VM
   ansible.proxmox.proxmox_vm:
@@ -465,19 +469,31 @@ class ProxmoxVmModule(ProxmoxResourceModule):
                 msg="EFI disk storage {0} is not active on node {1}.".format(storage, node)
             )
 
+    @staticmethod
+    def _normalize_machine_for_comparison(resource, desired_machine):
+        current_machine = resource.get("machine")
+        if not isinstance(current_machine, str):
+            return resource
+
+        machine_parts = current_machine.split("-", 2)
+        if len(machine_parts) != 3 or machine_parts[0] != "pc":
+            return resource
+
+        normalized_resource = dict(resource)
+        if desired_machine in ("q35", "i440fx"):
+            normalized_resource["machine"] = machine_parts[1]
+        else:
+            normalized_resource["machine"] = "pc-{0}-{1}".format(
+                machine_parts[1], machine_parts[2]
+            )
+        return normalized_resource
+
     def get_update_parameters(self, resource):
         desired = self._desired_parameters()
-        current_machine = resource.get("machine")
-        if isinstance(current_machine, str):
-            machine_parts = current_machine.split("-", 2)
-            if len(machine_parts) == 3 and machine_parts[0] == "pc":
-                resource = dict(resource)
-                if desired.get("machine") in ("q35", "i440fx"):
-                    resource["machine"] = machine_parts[1]
-                else:
-                    resource["machine"] = "pc-{0}-{1}".format(
-                        machine_parts[1], machine_parts[2]
-                    )
+        resource = self._normalize_machine_for_comparison(
+            resource,
+            desired.get("machine"),
+        )
         updates = self.get_parameter_updates(
             resource,
             {key: value for key, value in desired.items() if key not in FORMATTED_PARAMETERS},

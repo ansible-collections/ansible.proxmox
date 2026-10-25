@@ -2,8 +2,8 @@
 
 The `ansible.proxmox` collection provides Ansible modules for Proxmox VE (PVE)
 and Proxmox Backup Server (PBS). Its shared connection layer supports HTTPS
-with password or API-token authentication, and OpenSSH using the configured
-SSH agent or identity.
+with password or API-token authentication, and OpenSSH using a password, SSH
+agent, or identity file.
 
 ## Requirements
 
@@ -61,10 +61,12 @@ that the selected service, transport, and credentials work:
 
 For a private CA, provide `ca_path`. Keep credentials in Ansible Vault or a
 secret manager. HTTPS password authentication uses `api_password` instead of
-the token fields. For OpenSSH, set `api_backend: openssh` and configure the SSH
-agent or identity file, and set `ssh_user` to the SSH login. `api_user`
-remains the HTTPS account name, so both identities can be configured in shared
-defaults without changing between variable names.
+the token fields. For OpenSSH, set `api_backend: openssh` and `ssh_user` to the
+SSH login. Authenticate with `ssh_password`, an SSH agent, or an identity file;
+the password can also be supplied through `PROXMOX_SSH_PASSWORD`. `api_password`
+remains exclusive to HTTPS, and `api_user` remains the HTTPS account name, so
+both identities can be configured in shared defaults without changing variable
+names.
 
 Use `api_port` (or `PROXMOX_PORT`) to override the HTTPS port and
 `ssh_port` (or `PROXMOX_SSH_PORT`) to override the SSH port. If omitted,

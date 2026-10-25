@@ -81,6 +81,7 @@ def connection_params(**updates):
         "api_host": "proxmox.example.test",
         "api_user": "root@pam",
         "ssh_user": None,
+        "ssh_password": None,
         "api_password": "password-value",
         "api_token_id": None,
         "api_token_secret": None,
@@ -122,6 +123,8 @@ def test_argument_spec_merges_resource_arguments():
     assert spec["api_service"]["choices"] == ["PVE", "PBS"]
     assert spec["api_backend"]["choices"] == ["https", "openssh"]
     assert spec["ssh_user"]["fallback"][1] == ["PROXMOX_SSH_USER"]
+    assert spec["ssh_password"]["fallback"][1] == ["PROXMOX_SSH_PASSWORD"]
+    assert spec["ssh_password"]["no_log"] is True
     assert spec["ssh_port"]["fallback"][1] == ["PROXMOX_SSH_PORT"]
     assert spec["state"]["choices"] == ["present", "absent"]
     assert spec["name"] == {"type": "str"}
@@ -231,9 +234,10 @@ def test_pve_role_validation_checks_all_propagated_role_privileges(permissions, 
 def test_pve_role_validation_fails_closed_when_permissions_unavailable():
     module = FakeModule(connection_params())
     api = FakePveApi(permission_error=RuntimeError("permission endpoint unavailable"))
+    client = proxmox.ProxmoxClient(module)
 
     with pytest.raises(FailJson) as failure:
-        proxmox.ProxmoxClient(module).validate_pve_permissions(api, "/vms")
+        client.validate_pve_permissions(api, "/vms")
 
     assert "Unable to verify effective PVE permissions" in failure.value.result["msg"]
 
@@ -251,6 +255,7 @@ def test_openssh_options_support_both_services(monkeypatch, service):
     module = FakeModule(
         connection_params(
             ssh_user="root",
+            ssh_password="ssh-password-value",
             api_password=None,
             api_service=service,
             api_backend="openssh",
@@ -270,6 +275,7 @@ def test_openssh_options_support_both_services(monkeypatch, service):
         "timeout": 5,
         "port": 2222,
         "user": "root",
+        "password": "ssh-password-value",
         "config_file": "/tmp/ssh-config",
         "identity_file": "/tmp/id_ed25519",
         "forward_ssh_agent": True,
@@ -313,6 +319,11 @@ def test_openssh_requires_dedicated_ssh_user():
     [
         ({"api_token_id": "token", "api_token_secret": "secret"}, "Provide exactly one"),
         ({"api_password": None}, "Provide exactly one"),
+        ({"ssh_password": "ssh-password-value"}, "OpenSSH options cannot be used with the HTTPS backend"),
+        (
+            {"api_backend": "openssh", "ssh_user": "root"},
+            "cannot be used with the OpenSSH backend",
+        ),
         (
             {"api_password": None, "api_token_id": "token", "api_token_secret": None},
             "api_token_secret is required",
@@ -487,8 +498,10 @@ class DummyAction(ProxmoxActionModule):
 
 
 def test_info_lifecycle_is_read_only():
+    info = DummyInfo(FakeModule())
+
     with pytest.raises(ExitJson) as result:
-        DummyInfo(FakeModule()).execute()
+        info.execute()
 
     assert result.value.result == {"changed": False, "information": {"version": "1.0"}}
 

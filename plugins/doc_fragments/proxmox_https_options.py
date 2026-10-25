@@ -12,6 +12,38 @@ class ModuleDocFragment:
 
     DOCUMENTATION = r"""
 options:
+  api_user:
+    description:
+      - Proxmox account name for HTTPS authentication.
+      - Uses the E(PROXMOX_USER) environment variable when omitted.
+      - May be omitted for token authentication when O(api_token_id) contains C(user@realm!token).
+    type: str
+  api_password:
+    description:
+      - Account password for HTTPS password authentication.
+      - Uses the E(PROXMOX_PASSWORD) environment variable when omitted.
+    type: str
+  api_token_id:
+    description:
+      - API token name, or a complete C(user@realm!token) identifier.
+      - Uses the E(PROXMOX_TOKEN_ID) environment variable when omitted.
+    type: str
+  api_token_secret:
+    description:
+      - API token secret for HTTPS token authentication.
+      - Uses the E(PROXMOX_TOKEN_SECRET) environment variable when omitted.
+    type: str
+  api_port:
+    description:
+      - HTTPS API port used when C(api_backend=https).
+      - When omitted, proxmoxer selects the service default (8006 for PVE or 8007 for PBS).
+      - Uses the E(PROXMOX_PORT) environment variable when omitted.
+    type: int
+  api_otp:
+    description:
+      - One-time password used with HTTPS password authentication.
+      - Uses the E(PROXMOX_OTP) environment variable when omitted.
+    type: str
   validate_certs:
     description:
       - Validate the remote HTTPS certificate.
@@ -24,6 +56,10 @@ options:
       - Uses the E(PROXMOX_CA_PATH) environment variable when omitted.
       - Valid only when O(api_backend=https) and O(validate_certs=true).
     type: path
-requirements:
-  - requests
+  api_timeout:
+      description:
+        - Connection and request timeout in seconds.
+        - Uses the E(PROXMOX_API_TIMEOUT) environment variable when omitted.
+      type: int
+      default: 5
 """
