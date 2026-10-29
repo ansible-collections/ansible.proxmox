@@ -189,7 +189,7 @@ class ProxmoxResourceModule(ProxmoxBase):
                 serialized[parent] = self._serialize_formatted_options(options, primary_field)
                 continue
             if not isinstance(entries, list):
-                self.module.fail_json(msg="{0} must be a list.".format(parent))
+                self.module.fail_json(msg="{0} must be a list or string.".format(parent))
             for api_parameter, options in self._formatted_entries(
                 parent,
                 entries,
