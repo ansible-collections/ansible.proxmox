@@ -9,53 +9,41 @@ __metaclass__ = type
 
 DOCUMENTATION = r"""
 ---
-module: proxmox_api_connection_test
-short_description: Verify API access to Proxmox VE or Proxmox Backup Server
+module: proxmox_api_connection_info
+short_description: Verify API access to Proxmox VE
 version_added: "1.0.0"
 description:
-  - Opens a connection using the shared Proxmox collection connection options.
+  - Opens a connection to Proxmox VE using the shared Proxmox collection connection options.
   - Retrieves the API version to verify that authentication and transport work.
-  - Before using OpenSSH, establish non-interactive SSH access from the Ansible execution environment to O(api_host) as O(ssh_user).
-  - Configure access with an identity file or agent before running the module.
-  - Use O(api_port) to override the HTTPS port and O(ssh_port) to override the OpenSSH port.
+  - Use O(api_port) to override the HTTPS port.
 author:
   - Steve Fulmer (@stevefulme1)
   - Shahar Golshani (@shahargolshani)
 extends_documentation_fragment:
   - ansible.proxmox.proxmox_base
   - ansible.proxmox.proxmox_https_options
-  - ansible.proxmox.proxmox_openssh_options
+notes:
+  - This module does not perform an C(Administrator) role or ACL propagation check.
+  - A successful connection test confirms access to the API version endpoint, not the permissions required to run a specific module.
 """
 
 EXAMPLES = r"""
 - name: Check PVE over HTTPS with a username and password
-  ansible.proxmox.proxmox_api_connection_test:
+  ansible.proxmox.proxmox_api_connection_info:
     api_host: "{{ proxmox_api_host }}"
     api_user: "{{ proxmox_api_user }}"
     api_password: "{{ vault_proxmox_api_password }}"
-    api_service: PVE
-    api_backend: https
     validate_certs: true
     ca_path: "{{ proxmox_ca_path }}"
 
 - name: Check PVE over HTTPS with an API token
-  ansible.proxmox.proxmox_api_connection_test:
+  ansible.proxmox.proxmox_api_connection_info:
     api_host: "{{ proxmox_api_host }}"
     api_user: "{{ proxmox_api_user }}"
     api_token_id: "{{ proxmox_api_token_id }}"
     api_token_secret: "{{ vault_proxmox_api_token_secret }}"
-    api_service: PVE
-    api_backend: https
     validate_certs: true
     ca_path: "{{ proxmox_ca_path }}"
-
-- name: Check PVE over OpenSSH with an SSH key
-  ansible.proxmox.proxmox_api_connection_test:
-    api_host: "{{ proxmox_api_host }}"
-    api_service: PVE
-    api_backend: openssh
-    ssh_user: "{{ proxmox_ssh_user }}"
-    ssh_identity_file: "{{ proxmox_ssh_identity_file }}"
 """
 
 RETURN = r"""
@@ -77,7 +65,7 @@ from ansible_collections.ansible.proxmox.plugins.module_utils.proxmox_info impor
 
 
 class ProxmoxConnectionInfoModule(ProxmoxInfoModule):
-    """Retrieve version information through any supported connection."""
+    """Retrieve version information over HTTPS."""
 
     result_key = "version"
 

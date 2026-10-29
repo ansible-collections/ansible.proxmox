@@ -13,7 +13,7 @@ import pytest
 import yaml
 
 from ansible_collections.ansible.proxmox.plugins.module_utils.proxmox import proxmox_argument_spec
-from ansible_collections.ansible.proxmox.plugins.modules.proxmox_api_connection_test import (
+from ansible_collections.ansible.proxmox.plugins.modules.proxmox_api_connection_info import (
     EXAMPLES,
     ProxmoxConnectionInfoModule,
 )
@@ -28,29 +28,23 @@ class ExitJson(Exception):
 def test_connection_examples_cover_supported_authentication_modes():
     examples = yaml.safe_load(EXAMPLES)
     argument_spec = proxmox_argument_spec()
-    params = [example["ansible.proxmox.proxmox_api_connection_test"] for example in examples]
+    params = [example["ansible.proxmox.proxmox_api_connection_info"] for example in examples]
 
-    assert len(params) == 3
+    assert len(params) == 2
     assert all("api_host" in example_params for example_params in params)
     assert all(set(example_params).issubset(argument_spec) for example_params in params)
 
-    password_example, token_example, ssh_example = params
-    assert password_example["api_backend"] == "https"
+    password_example, token_example = params
     assert password_example["api_user"]
     assert password_example["api_password"]
     assert password_example["validate_certs"] is True
     assert password_example["ca_path"]
 
-    assert token_example["api_backend"] == "https"
     assert token_example["api_user"]
     assert token_example["api_token_id"]
     assert token_example["api_token_secret"]
     assert token_example["validate_certs"] is True
     assert token_example["ca_path"]
-
-    assert ssh_example["api_backend"] == "openssh"
-    assert ssh_example["ssh_user"]
-    assert ssh_example["ssh_identity_file"]
 
 
 def test_connection_check_returns_api_version_without_changes():

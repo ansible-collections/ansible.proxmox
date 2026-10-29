@@ -21,6 +21,8 @@ from ansible_collections.ansible.proxmox.plugins.modules.proxmox_vm import Proxm
 class FakeApi:
     def __init__(self):
         self.create_parameters = None
+        self.created_config = {"name": "created-vm", "memory": 512}
+        self.config_queries = 0
         self.update_parameters = None
         self.storage_queries = 0
         self.task_upids = []
@@ -56,6 +58,9 @@ class FakeApi:
         if uri is not None:
             self.machine_get_calls.append(uri)
             return self.machine_entries
+        if parameters.get("current") == 1:
+            self.config_queries += 1
+            return self.created_config
         self.storage_queries += 1
         self.storage_get_calls.append(parameters)
         return self.storage_entries
@@ -93,6 +98,7 @@ def module_params(**updates):
     params = {
         "node": "pve01",
         "vmid": 100,
+        "task_timeout": None,
         "name": None,
         "memory": None,
         "cores": None,
@@ -141,7 +147,8 @@ def test_disk_argument_and_examples_use_structured_disk_entries(monkeypatch):
     assert set(documentation["options"]["machine"]["suboptions"]) == set(spec["machine"]["options"])
     assert spec["disk"]["type"] == "list"
     assert spec["disk"]["elements"] == "dict"
-    assert set(spec["disk"]["options"]) == {"name", "storage", "size"}
+    assert set(spec["disk"]["options"]) == {"device", "storage", "size"}
+    assert set(documentation["options"]["disk"]["suboptions"]) == set(spec["disk"]["options"])
     for task in yaml.safe_load(proxmox_vm.EXAMPLES):
         arguments = task["ansible.proxmox.proxmox_vm"]
         assert set(arguments).issubset(spec)
@@ -149,7 +156,7 @@ def test_disk_argument_and_examples_use_structured_disk_entries(monkeypatch):
             if "choices" in spec[name]:
                 assert value in spec[name]["choices"]
         for disk in arguments.get("disk", []):
-            assert set(disk) == {"name", "storage", "size"}
+            assert set(disk) == {"device", "storage", "size"}
 
 
 @pytest.mark.parametrize(
@@ -188,21 +195,93 @@ def test_vm_rejects_vmid_outside_supported_range(vmid):
 
 def test_create_omits_parameters_equal_to_api_defaults():
     api = FakeApi()
-    result = make_vm(api=api).create_resource()
+    vm = make_vm(api=api)
+    result = vm.create_resource()
 
-    assert result == "UPID:pve01:task"
+    assert result == api.created_config
     assert api.create_parameters == {"vmid": 100}
     assert api.task_upids == ["UPID:pve01:task"]
+    assert api.config_queries == 1
+    assert vm.prepare_result(changed=True, resource=result) == {
+        "changed": True,
+        "vm": dict(api.created_config, vmid="100"),
+        "task_upid": "UPID:pve01:task",
+    }
 
 
-def test_vm_task_wait_uses_short_timeout(monkeypatch):
+def test_create_without_task_upid_reads_configuration():
+    api = Mock()
+    api.nodes.return_value.qemu.create.return_value = None
+    config = {"name": "created-vm", "memory": 1024}
+    api.nodes.return_value.qemu.return_value.config.get.return_value = config
+    vm = make_vm(api=api)
+
+    result = vm.create_resource()
+
+    assert result == config
+    assert vm.prepare_result(changed=True, resource=result) == {"changed": True, "vm": dict(config, vmid="100")}
+    api.nodes.return_value.qemu.return_value.config.get.assert_called_once_with(current=1)
+    api.nodes.return_value.tasks.assert_not_called()
+
+
+def test_create_task_failure_does_not_read_configuration(monkeypatch):
+    api = Mock()
+    api.nodes.return_value.qemu.create.return_value = "UPID:pve01:create"
+    monkeypatch.setattr(ProxmoxTask, "wait_for_task", Mock(side_effect=RuntimeError("task failed")))
+    vm = make_vm(api=api)
+
+    with pytest.raises(RuntimeError, match="task failed"):
+        vm.create_resource()
+
+    api.nodes.return_value.qemu.return_value.config.get.assert_not_called()
+
+
+def test_check_mode_creation_does_not_return_task_upid():
+    vm = make_vm()
+    resource = vm.get_check_mode_resource("create")
+
+    assert vm.prepare_result(changed=True, resource=resource) == {"changed": True, "vm": {"vmid": "100"}}
+
+
+def test_unchanged_vm_does_not_return_task_upid():
+    vm = make_vm()
+    resource = {"name": "existing-vm"}
+
+    assert vm.prepare_result(changed=False, resource=resource) == {"changed": False, "vm": dict(resource, vmid="100")}
+
+
+@pytest.mark.parametrize("vmid", [100, 98672])
+@pytest.mark.parametrize("resource", [None, {}, {"name": "existing-vm"}, {"vmid": "999", "name": "existing-vm"}])
+def test_vm_result_includes_actual_vmid_inside_vm_without_mutating_resource(vmid, resource):
+    vm = make_vm(module_params(vmid=vmid))
+    original = dict(resource) if resource is not None else None
+
+    result = vm.prepare_result(changed=True, resource=resource)
+
+    assert result["vm"] == dict(resource or {}, vmid=str(vmid))
+    assert set(result) == {"changed", "vm"}
+    assert resource == original
+
+
+def test_vm_return_documentation_matches_output_keys():
+    documentation = yaml.safe_load(proxmox_vm.RETURN)
+
+    assert set(documentation) == {"vm", "task_upid"}
+    assert documentation["vm"]["sample"]["vmid"] == "100"
+
+
+@pytest.mark.parametrize(
+    "parameters, expected_options",
+    [({}, {}), ({"task_timeout": 0}, {"timeout": 0}), ({"task_timeout": 900}, {"timeout": 900})],
+)
+def test_vm_task_wait_uses_configured_timeout(monkeypatch, parameters, expected_options):
     wait_for_task = Mock()
     monkeypatch.setattr(ProxmoxTask, "wait_for_task", wait_for_task)
-    vm = make_vm()
+    vm = make_vm(module_params(**parameters))
 
     vm._wait_for_task("UPID:pve01:task")
 
-    wait_for_task.assert_called_once_with("UPID:pve01:task", timeout=120)
+    wait_for_task.assert_called_once_with("UPID:pve01:task", **expected_options)
 
 
 @pytest.mark.parametrize("efitype", ["2m", "4m"])
@@ -249,7 +328,7 @@ def test_create_with_ovmf_rejects_unavailable_or_inactive_efi_storage(storage_en
 def test_disk_allocation_is_formatted_only_for_creation(size):
     api = FakeApi()
     vm = make_vm(
-        module_params(disk=[{"name": "scsi0", "storage": "local-lvm", "size": size}]),
+        module_params(disk=[{"device": "scsi0", "storage": "local-lvm", "size": size}]),
         api,
     )
 
@@ -260,7 +339,7 @@ def test_disk_allocation_is_formatted_only_for_creation(size):
 
 
 def test_disk_definitions_are_ignored_by_update_comparison():
-    vm = make_vm(module_params(disk=[{"name": "scsi0", "storage": "missing", "size": "999G"}]))
+    vm = make_vm(module_params(disk=[{"device": "scsi0", "storage": "missing", "size": "999G"}]))
     resource = {
         "scsi0": "local-lvm:vm-100-disk-0,size=32G",
         "scsi1": "local-lvm:vm-100-disk-1,size=64G",
@@ -280,7 +359,7 @@ def test_existing_vm_does_not_validate_creation_disk_storage():
     }
     api.nodes.return_value.qemu.return_value.config.get.return_value = {"name": "existing"}
     vm = make_vm(
-        module_params(disk=[{"name": "scsi0", "storage": "missing", "size": "32G"}]),
+        module_params(disk=[{"device": "scsi0", "storage": "missing", "size": "32G"}]),
         api,
     )
     vm.client.validate_pve_permissions = Mock()
@@ -311,12 +390,84 @@ def test_missing_vm_is_detected_before_status_lookup():
 def test_creation_check_mode_includes_disk_allocation_without_storage_queries():
     api = FakeApi()
     vm = make_vm(
-        module_params(disk=[{"name": "scsi0", "storage": "local-lvm", "size": "32G"}]),
+        module_params(disk=[{"device": "scsi0", "storage": "local-lvm", "size": "32G"}]),
         api,
     )
 
     assert vm.get_check_mode_resource("create") == {"vmid": 100, "scsi0": "local-lvm:32"}
     assert api.storage_queries == 0
+
+
+@pytest.mark.parametrize("device", ["ide0", "ide3", "sata0", "sata5", "virtio0", "virtio15", "scsi0", "scsi30"])
+def test_creation_accepts_disk_device_boundaries(device):
+    vm = make_vm(module_params(disk=[{"device": device, "storage": "local-lvm", "size": "32G"}]))
+
+    assert vm._creation_parameters() == {"vmid": 100, device: "local-lvm:32"}
+
+
+def test_creation_accepts_same_disk_index_for_different_types():
+    devices = ["ide0", "sata0", "virtio0", "scsi0"]
+    disks = [{"device": device, "storage": "local-lvm", "size": "32G"} for device in devices]
+    vm = make_vm(module_params(disk=disks))
+
+    parameters = vm._creation_parameters()
+
+    assert parameters["vmid"] == 100
+    assert all(parameters[device] == "local-lvm:32" for device in devices)
+
+
+@pytest.mark.parametrize("check_mode", [False, True])
+@pytest.mark.parametrize(
+    "device",
+    ["vmid", "name", "net0", "scsi", "scsi-1", "ide4", "sata6", "virtio16", "scsi31", "scsi00", "scsi1x", "scsi0 ", ""],
+)
+def test_creation_rejects_invalid_disk_devices_before_allocation(device, check_mode):
+    api = FakeApi()
+    vm = make_vm(module_params(disk=[{"device": device, "storage": "local-lvm", "size": "32G"}]), api)
+    vm.module.fail_json = Mock(side_effect=RuntimeError("module failed"))
+
+    with pytest.raises(RuntimeError, match="module failed"):
+        if check_mode:
+            vm.get_check_mode_resource("create")
+        else:
+            vm.create_resource()
+
+    assert "Invalid disk device" in vm.module.fail_json.call_args.kwargs["msg"]
+    assert api.create_parameters is None
+    assert api.storage_queries == 0
+
+
+@pytest.mark.parametrize("check_mode", [False, True])
+@pytest.mark.parametrize("device", ["ide0", "sata0", "virtio0", "scsi0"])
+def test_creation_rejects_duplicate_disk_devices_before_allocation(device, check_mode):
+    api = FakeApi()
+    disks = [
+        {"device": device, "storage": "local-lvm", "size": "32G"},
+        {"device": device, "storage": "local-lvm", "size": "64G"},
+    ]
+    vm = make_vm(module_params(disk=disks), api)
+    vm.module.fail_json = Mock(side_effect=RuntimeError("module failed"))
+
+    with pytest.raises(RuntimeError, match="module failed"):
+        if check_mode:
+            vm.get_check_mode_resource("create")
+        else:
+            vm.create_resource()
+
+    assert vm.module.fail_json.call_args.kwargs["msg"] == "Duplicate disk device {0}.".format(device)
+    assert api.create_parameters is None
+    assert api.storage_queries == 0
+
+
+@pytest.mark.parametrize("ide2", ["none", "cdrom"])
+def test_creation_rejects_disk_conflicting_with_cdrom_option(ide2):
+    vm = make_vm(module_params(ide2=ide2, disk=[{"device": "ide2", "storage": "local-lvm", "size": "32G"}]))
+    vm.module.fail_json = Mock(side_effect=RuntimeError("module failed"))
+
+    with pytest.raises(RuntimeError, match="module failed"):
+        vm._creation_parameters()
+
+    assert "Disk device ide2 conflicts" in vm.module.fail_json.call_args.kwargs["msg"]
 
 
 @pytest.mark.parametrize("ide2", ["none", "cdrom"])
@@ -562,7 +713,7 @@ def test_create_does_not_require_existing_vm_power_state():
     vm.module.check_mode = False
     vm.module.exit_json = Mock(side_effect=SystemExit)
     vm.get_resource = Mock(return_value=None)
-    vm.create_resource = Mock(return_value="UPID:pve01:create")
+    vm.create_resource = Mock(return_value={"name": "created-vm"})
 
     with pytest.raises(SystemExit):
         vm.execute_resource_module()
@@ -606,7 +757,12 @@ def test_absent_state_deletes_stopped_vm():
     vm = make_vm(module_params(state="absent"), api)
     vm._vm_status = "stopped"
 
-    assert vm.delete_resource({"vmid": 100}) == "UPID:pve01:delete"
+    assert vm.delete_resource({"vmid": 100}) is None
+    assert vm.prepare_result(changed=True) == {
+        "changed": True,
+        "vm": {"vmid": "100"},
+        "task_upid": "UPID:pve01:delete",
+    }
     api.nodes.return_value.tasks.assert_called_once_with("UPID:pve01:delete")
 
 

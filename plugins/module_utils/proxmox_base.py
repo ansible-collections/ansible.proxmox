@@ -8,29 +8,46 @@ from __future__ import absolute_import, division, print_function
 
 __metaclass__ = type
 
+from abc import ABC
+
 from .proxmox import ProxmoxClient
 
 
-class ProxmoxBase:
+class ProxmoxBase(ABC):
     """Common client, API error handling, and result shaping."""
 
     result_key = "result"
+    service = None
 
     def __init__(self, module, client=None):
+        """Attach the Ansible module and a shared, lazy API client.
+
+        Args:
+            module: Ansible module providing parameters and result handling.
+            client: Optional existing ProxmoxClient; otherwise one is created.
+        """
         self.module = module
-        self.client = client or ProxmoxClient(module)
+        self.client = client or ProxmoxClient(module, service=self.service)
 
     @property
     def api(self):
+        """Return the underlying proxmoxer client through the shared client helper."""
         return self.client.api
 
-    def validate_vmid(self):
-        vmid = self.module.params.get("vmid")
-        if vmid is not None and not 100 <= vmid <= 999999999:
-            self.module.fail_json(msg="VMID must be between 100 and 999999999.")
+    def validate_proxmox_resource_exist(self, resource_type, resource_name, getter, resource_key=None, fail_on_missing=True):
+        """Check resource existence, optionally failing when it is missing.
 
-    def validate_resource(self, resource_type, resource_name, getter, resource_key=None, fail_on_missing=True):
-        """Ensure a Proxmox resource exists before using its endpoint."""
+        Args:
+            resource_type: Resource label used in operation and failure messages.
+            resource_name: Resource name or identifier to locate.
+            getter: No-argument API callable returning a resource or entry list.
+            resource_key: Optional entry field to match against resource_name.
+            fail_on_missing: Whether a missing resource should fail the module.
+
+        Returns:
+            Whether a matching resource exists. Without resource_key, any non-None
+            response counts as existing; HTTP 404 is treated as missing.
+        """
         resource = self.call_api(
             "Retrieving {0} {1}".format(resource_type, resource_name),
             getter,
@@ -50,33 +67,47 @@ class ProxmoxBase:
         return exists
 
     def call_api(self, operation, function, *args, **kwargs):
+        """Call an API endpoint and report failures through the shared client.
+
+        Args:
+            operation: Human-readable description used in failure messages.
+            function: API callable to invoke.
+            *args: Positional arguments forwarded to the callable.
+            **kwargs: API keywords. The helper consumes return_none_on_404 to
+                optionally treat HTTP 404 as an absent resource.
+
+        Returns:
+            The API response, or None for an explicitly tolerated HTTP 404.
+        """
         return_none_on_404 = kwargs.pop("return_none_on_404", False)
         try:
             return function(*args, **kwargs)
         except Exception as exception:
             if return_none_on_404 and self.client.exception_status(exception) == 404:
                 return None
-            self._fail_invalid_parameter(exception, kwargs)
-            self.client.fail_request(operation, exception)
-
-    def _fail_invalid_parameter(self, exception, parameters):
-        if self.client.exception_status(exception) != 400:
-            return
-
-        errors = getattr(exception, "errors", None)
-        if not isinstance(errors, dict):
-            return
-
-        for parameter, value in parameters.items():
-            if parameter in errors:
-                self.module.fail_json(
-                    msg="{0} value for {1} is not available".format(value, parameter)
-                )
+            self.client.fail_request(operation, exception, parameters=kwargs)
 
     def prepare_result(self, changed, resource=None, **values):
+        """Assemble result data using this handler's resource key.
+
+        Args:
+            changed: Whether the operation changed or would change the resource.
+            resource: Data stored under result_key.
+            **values: Additional result fields, overriding existing keys.
+
+        Returns:
+            A new mapping suitable for Ansible's exit_json.
+        """
         result = {"changed": changed, self.result_key: resource}
         result.update(values)
         return result
 
     def exit(self, changed, resource=None, **values):
+        """Finish the module with a prepared resource result.
+
+        Args:
+            changed: Whether the operation changed or would change the resource.
+            resource: Data stored under result_key.
+            **values: Additional result fields passed to prepare_result.
+        """
         self.module.exit_json(**self.prepare_result(changed, resource, **values))

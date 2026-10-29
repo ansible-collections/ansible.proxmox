@@ -6,17 +6,27 @@ from __future__ import absolute_import, division, print_function
 
 __metaclass__ = type
 
+from abc import abstractmethod
+
 from .proxmox_base import ProxmoxBase
 
 
 class ProxmoxInfoModule(ProxmoxBase):
-    """Template method for read-only modules."""
+    """Abstract template for read-only modules."""
 
+    @abstractmethod
     def get_info(self):
-        raise NotImplementedError("get_info must be implemented")
+        """Retrieve information without modifying Proxmox resources.
+
+        Returns:
+            API information to expose under this handler's result_key.
+        """
+        pass
 
     def execute_info_module(self):
+        """Retrieve information and exit with changed set to False."""
         self.exit(changed=False, resource=self.get_info())
 
     def execute(self):
+        """Run the read-only lifecycle through the common handler entry point."""
         self.execute_info_module()

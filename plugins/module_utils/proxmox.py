@@ -25,15 +25,16 @@ try:
 except ImportError:
     REQUESTS_IMPORT_ERROR = traceback.format_exc()
 
-OPENSSH_WRAPPER_IMPORT_ERROR = None
-try:
-    __import__("openssh_wrapper")
-except ImportError:
-    OPENSSH_WRAPPER_IMPORT_ERROR = traceback.format_exc()
-
 
 def proxmox_argument_spec(argument_spec=None):
-    """Return connection options merged with a module-specific argument spec."""
+    """Build the shared HTTPS connection argument specification.
+
+    Args:
+        argument_spec: Optional module arguments, overriding shared definitions.
+
+    Returns:
+        A new mapping of shared and module-specific argument definitions.
+    """
     spec = {
         "api_host": {
             "type": "str",
@@ -43,10 +44,6 @@ def proxmox_argument_spec(argument_spec=None):
         "api_user": {
             "type": "str",
             "fallback": (env_fallback, ["PROXMOX_USER"]),
-        },
-        "ssh_user": {
-            "type": "str",
-            "fallback": (env_fallback, ["PROXMOX_SSH_USER"]),
         },
         "api_password": {
             "type": "str",
@@ -62,25 +59,9 @@ def proxmox_argument_spec(argument_spec=None):
             "no_log": True,
             "fallback": (env_fallback, ["PROXMOX_TOKEN_SECRET"]),
         },
-        "api_service": {
-            "type": "str",
-            "default": "PVE",
-            "choices": ["PVE", "PBS"],
-            "fallback": (env_fallback, ["PROXMOX_SERVICE"]),
-        },
-        "api_backend": {
-            "type": "str",
-            "default": "https",
-            "choices": ["https", "openssh"],
-            "fallback": (env_fallback, ["PROXMOX_BACKEND"]),
-        },
         "api_port": {
             "type": "int",
             "fallback": (env_fallback, ["PROXMOX_PORT"]),
-        },
-        "ssh_port": {
-            "type": "int",
-            "fallback": (env_fallback, ["PROXMOX_SSH_PORT"]),
         },
         "validate_certs": {
             "type": "bool",
@@ -101,26 +82,20 @@ def proxmox_argument_spec(argument_spec=None):
             "no_log": True,
             "fallback": (env_fallback, ["PROXMOX_OTP"]),
         },
-        "ssh_config_file": {
-            "type": "path",
-            "fallback": (env_fallback, ["PROXMOX_SSH_CONFIG_FILE"]),
-        },
-        "ssh_identity_file": {
-            "type": "path",
-            "fallback": (env_fallback, ["PROXMOX_SSH_IDENTITY_FILE"]),
-        },
-        "ssh_forward_agent": {
-            "type": "bool",
-            "default": False,
-            "fallback": (env_fallback, ["PROXMOX_SSH_FORWARD_AGENT"]),
-        },
     }
     spec.update(argument_spec or {})
     return spec
 
 
 def proxmox_resource_argument_spec(argument_spec=None):
-    """Return connection and standard resource state arguments."""
+    """Build connection arguments with a standard present/absent state option.
+
+    Args:
+        argument_spec: Optional module arguments, overriding shared definitions.
+
+    Returns:
+        A new argument specification with state defaulting to 'present'.
+    """
     resource_spec = {
         "state": {
             "type": "str",
@@ -132,76 +107,132 @@ def proxmox_resource_argument_spec(argument_spec=None):
     return proxmox_argument_spec(resource_spec)
 
 
-def proxmox_required_together():
-    """Return constraints shared by all Proxmox modules."""
-    return [["api_token_id", "api_token_secret"]]
+def proxmox_required_together(required_together=None):
+    """Combine token-pair requirements with module-specific parameter groups.
+
+    Args:
+        required_together: Optional groups whose members must be supplied together.
+
+    Returns:
+        Independent group lists containing shared and additional requirements.
+    """
+    return [["api_token_id", "api_token_secret"]] + [list(group) for group in required_together or []]
 
 
-def proxmox_mutually_exclusive():
-    """Return authentication options that cannot be combined."""
-    return [["api_password", "api_token_id"]]
+def proxmox_mutually_exclusive(mutually_exclusive=None):
+    """Combine authentication exclusions with module-specific parameter groups.
 
+    Args:
+        mutually_exclusive: Optional groups whose members cannot be used together.
 
-def _exception_status(exception):
-    """Extract an HTTP status without rendering a potentially sensitive error."""
-    for attribute in ("status", "status_code"):
-        value = getattr(exception, attribute, None)
-        if value is not None:
-            return value
-
-    response = getattr(exception, "response", None)
-    if response is not None:
-        return getattr(response, "status_code", None)
-    return None
+    Returns:
+        Independent group lists containing shared and additional exclusions.
+    """
+    return [["api_password", "api_token_id"]] + [list(group) for group in mutually_exclusive or []]
 
 
 class ProxmoxClient:
     """Validate connection parameters and lazily construct a proxmoxer client."""
 
-    def __init__(self, module):
+    def __init__(self, module, service=None):
+        """Store connection settings without opening an API connection.
+
+        Args:
+            module: Ansible module providing connection parameters and failures.
+            service: Internal proxmoxer service name; None uses its PVE default.
+        """
         self.module = module
+        self.service = service
         self._api = None
+        self._roles = None
 
-    def _fail(self, message, **details):
-        self.module.fail_json(msg=message, **details)
+    def fail_request(self, operation, exception, parameters=None):
+        """Exit with API error details and a parameter-specific message when possible.
 
-    def fail_request(self, operation, exception):
-        """Fail without exposing a third-party exception message or credentials."""
+        Args:
+            operation: Human-readable description of the failed API operation.
+            exception: Original API exception, retained as text in 'api_error'.
+            parameters: Submitted parameters used to identify HTTP 400 field errors.
+        """
         details = {"error_type": type(exception).__name__}
-        status = _exception_status(exception)
+        status = self.exception_status(exception)
         if status is not None:
             details["status_code"] = status
-        self._fail("{0} failed".format(operation), **details)
+        api_error = str(exception)
+        details["api_error"] = api_error
+        message = "{0} failed: {1}".format(operation, api_error)
+        errors = getattr(exception, "errors", None)
+        if status == 400 and isinstance(errors, dict):
+            for parameter, value in (parameters or {}).items():
+                if parameter in errors:
+                    message = "{0} value for {1} is not available".format(value, parameter)
+                    break
+        self.module.fail_json(msg=message, **details)
 
     @staticmethod
     def exception_status(exception):
-        """Expose HTTP status inspection to lifecycle helpers."""
-        return _exception_status(exception)
+        """Extract an HTTP status from an exception or its response.
+
+        Args:
+            exception: Error exposing status, status_code, or response.status_code.
+
+        Returns:
+            The first available status value, or None when none is provided.
+        """
+        for attribute in ("status", "status_code"):
+            value = getattr(exception, attribute, None)
+            if value is not None:
+                return value
+
+        response = getattr(exception, "response", None)
+        if response is not None:
+            return getattr(response, "status_code", None)
+        return None
 
     def _token_identity(self, user, token_id):
-        """Accept either a token name or the conventional user!token form."""
+        """Resolve a token identity, failing for malformed or conflicting users.
+
+        Args:
+            user: Configured API user, if supplied.
+            token_id: Token name or full 'user@realm!token' identifier.
+
+        Returns:
+            A pair containing the API user and the unqualified token name.
+        """
         if "!" not in token_id:
             return user, token_id
 
         token_user, token_name = token_id.split("!", 1)
         if not token_user or not token_name:
-            self._fail("api_token_id must use the format user@realm!token or token")
+            self.module.fail_json(msg="api_token_id must use the format user@realm!token or token")
         if user and user != token_user:
-            self._fail("api_user must match the user embedded in api_token_id")
+            self.module.fail_json(msg="api_user must match the user embedded in api_token_id")
         return token_user, token_name
 
     def validate_pve_permissions(self, api, path, role="Administrator", require_propagation=True):
-        """Ensure the authenticated identity has a role's effective permissions at a path."""
-        params = self.module.params
-        if params.get("api_service", "PVE").upper() != "PVE":
+        """Fail unless effective PVE privileges satisfy the requested role.
+
+        Role definitions are cached per client; permissions are fetched each time.
+        Non-PVE services skip this check.
+
+        Args:
+            api: Connected proxmoxer client used to query roles and permissions.
+            path: PVE ACL path whose effective privileges should be checked.
+            role: Role defining the complete set of required privileges.
+            require_propagation: Whether every required privilege must propagate.
+        """
+        if self.service not in (None, "pve"):
             return
 
         try:
-            roles = api.access.roles.get()
+            if self._roles is None:
+                self._roles = api.access.roles.get()
+            roles = self._roles
             permissions = api.access.permissions.get(path=path)
-        except Exception:
-            self._fail(
-                "Unable to verify effective PVE permissions for role {0} on {1}.".format(role, path)
+        except Exception as exception:
+            self.fail_request(
+                "Unable to verify effective PVE permissions for role {0} on {1}".format(role, path),
+                exception,
             )
 
         role_info = next(
@@ -209,8 +240,8 @@ class ProxmoxClient:
             None,
         ) if isinstance(roles, list) else None
         if role_info is None:
-            self._fail(
-                "Unable to verify PVE role {0}; refusing to continue.".format(role)
+            self.module.fail_json(
+                msg="Unable to verify PVE role {0}; refusing to continue.".format(role)
             )
 
         role_privileges = role_info.get("privs", "")
@@ -224,9 +255,11 @@ class ProxmoxClient:
             role_privileges = set(role_privileges or [])
 
         effective = permissions.get(path) if isinstance(permissions, dict) else None
+        if permissions == {}:
+            effective = {}
         if not isinstance(effective, dict):
-            self._fail(
-                "Unable to verify effective PVE permissions for role {0} on {1}.".format(role, path)
+            self.module.fail_json(
+                msg="Unexpected PVE permissions response for role {0} on {1}.".format(role, path)
             )
 
         missing = sorted(
@@ -235,36 +268,41 @@ class ProxmoxClient:
             if privilege not in effective or (require_propagation and not bool(effective[privilege]))
         )
         if missing:
-            self._fail(
-                "Authenticated identity lacks full {0} permissions propagated on {1}; missing: {2}.".format(
+            self.module.fail_json(
+                msg="Authenticated identity lacks full {0} permissions propagated on {1}; missing: {2}.".format(
                     role, path, ", ".join(missing)
                 )
             )
 
     def _validate_https_options(self, params):
+        """Fail for conflicting authentication options or invalid TLS settings.
+
+        Args:
+            params: Module parameters containing password/token and TLS options.
+        """
         password = params.get("api_password")
         token_id = params.get("api_token_id")
         token_secret = params.get("api_token_secret")
         otp = params.get("api_otp")
 
         if bool(password) == bool(token_id):
-            self._fail("Provide exactly one of api_password or api_token_id/api_token_secret for HTTPS")
+            self.module.fail_json(msg="Provide exactly one of api_password or api_token_id/api_token_secret for HTTPS")
         if token_id and not token_secret:
-            self._fail("api_token_secret is required when api_token_id is set")
+            self.module.fail_json(msg="api_token_secret is required when api_token_id is set")
         if token_secret and not token_id:
-            self._fail("api_token_id is required when api_token_secret is set")
+            self.module.fail_json(msg="api_token_id is required when api_token_secret is set")
         if token_id and otp:
-            self._fail("api_otp can only be used with HTTPS password authentication")
+            self.module.fail_json(msg="api_otp can only be used with HTTPS password authentication")
         if params.get("ca_path") and not params["validate_certs"]:
-            self._fail("ca_path requires validate_certs=true")
-        if (
-            params.get("ssh_config_file")
-            or params.get("ssh_identity_file")
-            or params.get("ssh_forward_agent")
-        ):
-            self._fail("OpenSSH options cannot be used with the HTTPS backend")
+            self.module.fail_json(msg="ca_path requires validate_certs=true")
 
     def _https_options(self, params, options):
+        """Validate HTTPS settings and populate proxmoxer options in place.
+
+        Args:
+            params: Module connection parameters, including authentication and TLS.
+            options: Mutable keyword mapping receiving credentials and verify_ssl.
+        """
         self._validate_https_options(params)
         user = params.get("api_user")
         password = params.get("api_password")
@@ -281,7 +319,7 @@ class ProxmoxClient:
                 options["otp"] = otp
 
         if not user:
-            self._fail("api_user is required for HTTPS password authentication or a token name without a user")
+            self.module.fail_json(msg="api_user is required for HTTPS password authentication or a token name without a user")
 
         options["user"] = user
         if params.get("ca_path") and params["validate_certs"]:
@@ -289,78 +327,50 @@ class ProxmoxClient:
         else:
             options["verify_ssl"] = params["validate_certs"]
 
-    def _openssh_options(self, params, options):
-        user = params.get("ssh_user")
-        if not user:
-            self._fail("ssh_user is required for OpenSSH connections")
-
-        forbidden = {
-            "api_password": params.get("api_password"),
-            "api_token_id": params.get("api_token_id"),
-            "api_token_secret": params.get("api_token_secret"),
-            "api_otp": params.get("api_otp"),
-            "ca_path": params.get("ca_path"),
-            "validate_certs": params.get("validate_certs") is False,
-        }
-        configured = sorted(name for name, value in forbidden.items() if value)
-        if configured:
-            self._fail(
-                "HTTPS authentication and certificate options cannot be used with the OpenSSH backend",
-                conflicting_options=configured,
-            )
-
-        options["user"] = user
-        if params.get("ssh_config_file"):
-            options["config_file"] = params["ssh_config_file"]
-        if params.get("ssh_identity_file"):
-            options["identity_file"] = params["ssh_identity_file"]
-        if params.get("ssh_forward_agent"):
-            options["forward_ssh_agent"] = True
-
     def connection_options(self):
-        """Return validated proxmoxer keyword arguments for the selected backend."""
+        """Validate connection parameters and build proxmoxer HTTPS options.
+
+        Returns:
+            Connection keywords including authentication, timeout, and TLS settings.
+            Invalid host, port, timeout, or authentication settings fail the module.
+        """
         params = self.module.params
         if not params.get("api_host"):
-            self._fail("api_host must not be empty")
+            self.module.fail_json(msg="api_host must not be empty")
         if params["api_timeout"] <= 0:
-            self._fail("api_timeout must be greater than zero")
-        backend = params["api_backend"]
-        port_option = "api_port" if backend == "https" else "ssh_port"
-        port = params.get(port_option)
+            self.module.fail_json(msg="api_timeout must be greater than zero")
+        port = params.get("api_port")
         if port is not None and not 1 <= port <= 65535:
-            self._fail("{0} must be between 1 and 65535".format(port_option))
+            self.module.fail_json(msg="api_port must be between 1 and 65535")
 
         options = {
-            "backend": backend,
-            "service": params["api_service"],
             "timeout": params["api_timeout"],
         }
+        if self.service is not None:
+            options["service"] = self.service
         if port is not None:
             options["port"] = port
 
-        if backend == "https":
-            self._https_options(params, options)
-        elif backend == "openssh":
-            self._openssh_options(params, options)
-        else:
-            self._fail("Unsupported api_backend", api_backend=backend)
+        self._https_options(params, options)
         return options
 
     def get_api(self):
-        """Return a cached ProxmoxAPI instance, constructing it on first use."""
+        """Construct the API client on first use and reuse it thereafter.
+
+        Returns:
+            The cached proxmoxer client. Missing dependencies or connection setup
+            errors fail the module instead of returning a client.
+        """
         if self._api is not None:
             return self._api
         if ProxmoxAPI is None:
-            self._fail(
-                missing_required_lib("proxmoxer", url="https://github.com/proxmoxer/proxmoxer"),
+            self.module.fail_json(
+                msg=missing_required_lib("proxmoxer", url="https://github.com/proxmoxer/proxmoxer"),
                 exception=PROXMOXER_IMPORT_ERROR,
             )
 
-        backend = self.module.params["api_backend"]
-        if backend == "https" and REQUESTS_IMPORT_ERROR:
-            self._fail(missing_required_lib("requests"), exception=REQUESTS_IMPORT_ERROR)
-        if backend == "openssh" and OPENSSH_WRAPPER_IMPORT_ERROR:
-            self._fail(missing_required_lib("openssh_wrapper"), exception=OPENSSH_WRAPPER_IMPORT_ERROR)
+        if REQUESTS_IMPORT_ERROR:
+            self.module.fail_json(msg=missing_required_lib("requests"), exception=REQUESTS_IMPORT_ERROR)
 
         try:
             self._api = ProxmoxAPI(self.module.params["api_host"], **self.connection_options())
@@ -370,5 +380,5 @@ class ProxmoxClient:
 
     @property
     def api(self):
-        """Expose the lazy proxmoxer client as a property."""
+        """Return the proxmoxer client, initializing it lazily when first accessed."""
         return self.get_api()

@@ -6,6 +6,9 @@ from __future__ import absolute_import, division, print_function
 
 __metaclass__ = type
 
+from inspect import isabstract
+from unittest.mock import Mock
+
 import pytest
 
 from ansible_collections.ansible.proxmox.plugins.module_utils import proxmox
@@ -50,8 +53,10 @@ class FakeAccessEndpoint:
 class FakePermissionsEndpoint:
     def __init__(self, api):
         self.api = api
+        self.paths = []
 
     def get(self, path=None):
+        self.paths.append(path)
         if self.api.permission_error:
             raise self.api.permission_error
         return {path: self.api.permissions} if path else self.api.permissions
@@ -60,8 +65,10 @@ class FakePermissionsEndpoint:
 class FakeRolesEndpoint:
     def __init__(self, api):
         self.api = api
+        self.calls = 0
 
     def get(self):
+        self.calls += 1
         if self.api.role_error:
             raise self.api.role_error
         return self.api.roles
@@ -80,21 +87,14 @@ def connection_params(**updates):
     params = {
         "api_host": "proxmox.example.test",
         "api_user": "root@pam",
-        "ssh_user": None,
         "api_password": "password-value",
         "api_token_id": None,
         "api_token_secret": None,
-        "api_service": "PVE",
-        "api_backend": "https",
         "api_port": None,
-        "ssh_port": None,
         "validate_certs": True,
         "ca_path": None,
         "api_timeout": 5,
         "api_otp": None,
-        "ssh_config_file": None,
-        "ssh_identity_file": None,
-        "ssh_forward_agent": False,
     }
     params.update(updates)
     return params
@@ -106,26 +106,113 @@ def test_api_validation_error_identifies_unavailable_parameter_value():
         errors = {"cpu": "invalid value"}
 
     def reject_parameter(**params):
-        raise ApiValidationError()
+        raise ApiValidationError("400 Bad Request: invalid CPU model")
 
-    info = ProxmoxInfoModule(FakeModule())
+    info = DummyInfo(FakeModule())
 
     with pytest.raises(FailJson) as failure:
         info.call_api("Updating a VM", reject_parameter, cpu="unsupported-cpu")
 
-    assert failure.value.result == {"msg": "unsupported-cpu value for cpu is not available"}
+    assert failure.value.result == {
+        "msg": "unsupported-cpu value for cpu is not available",
+        "api_error": "400 Bad Request: invalid CPU model",
+        "error_type": "ApiValidationError",
+        "status_code": 400,
+    }
+
+
+@pytest.mark.parametrize(
+    ("status", "errors", "parameters"),
+    [
+        (400, {"memory": "invalid value"}, {"cpu": "unsupported-cpu"}),
+        (400, None, {"cpu": "unsupported-cpu"}),
+        (400, ["cpu"], {"cpu": "unsupported-cpu"}),
+        (400, {"cpu": "invalid value"}, None),
+        (403, {"cpu": "permission denied"}, {"cpu": "unsupported-cpu"}),
+        (404, {"cpu": "not found"}, {"cpu": "unsupported-cpu"}),
+    ],
+)
+def test_fail_request_preserves_generic_api_errors(status, errors, parameters):
+    exception = RuntimeError("server rejected request")
+    exception.status_code = status
+    exception.errors = errors
+    client = proxmox.ProxmoxClient(FakeModule())
+
+    with pytest.raises(FailJson) as failure:
+        client.fail_request("Updating a VM", exception, parameters=parameters)
+
+    assert failure.value.result == {
+        "msg": "Updating a VM failed: server rejected request",
+        "api_error": "server rejected request",
+        "error_type": "RuntimeError",
+        "status_code": status,
+    }
+
+
+def test_call_api_optional_404_returns_none():
+    exception = RuntimeError("resource not found")
+    exception.status_code = 404
+    lookup = Mock(side_effect=exception)
+    info = DummyInfo(FakeModule())
+
+    assert info.call_api("Retrieving a VM", lookup, return_none_on_404=True) is None
+    lookup.assert_called_once_with()
 
 
 def test_argument_spec_merges_resource_arguments():
     spec = proxmox.proxmox_resource_argument_spec({"name": {"type": "str"}})
 
-    assert spec["api_service"]["choices"] == ["PVE", "PBS"]
-    assert spec["api_backend"]["choices"] == ["https", "openssh"]
-    assert spec["ssh_user"]["fallback"][1] == ["PROXMOX_SSH_USER"]
-    assert "ssh_password" not in spec
-    assert spec["ssh_port"]["fallback"][1] == ["PROXMOX_SSH_PORT"]
+    assert "api_service" not in spec
+    assert set(spec) == {
+        "api_host", "api_user", "api_password", "api_token_id", "api_token_secret",
+        "api_port", "validate_certs", "ca_path", "api_timeout", "api_otp", "state", "name",
+    }
     assert spec["state"]["choices"] == ["present", "absent"]
     assert spec["name"] == {"type": "str"}
+
+
+@pytest.mark.parametrize(
+    ("helper", "shared_group"),
+    [
+        (proxmox.proxmox_required_together, ["api_token_id", "api_token_secret"]),
+        (proxmox.proxmox_mutually_exclusive, ["api_password", "api_token_id"]),
+    ],
+)
+def test_constraint_helpers_preserve_defaults_and_append_module_groups(helper, shared_group):
+    assert helper() == [shared_group]
+    assert helper([]) == [shared_group]
+    assert helper([["first", "second"]]) == [shared_group, ["first", "second"]]
+
+
+@pytest.mark.parametrize("helper", [proxmox.proxmox_required_together, proxmox.proxmox_mutually_exclusive])
+def test_constraint_helpers_return_independent_groups(helper):
+    module_groups = [["first", "second"]]
+    expected = helper(module_groups)
+    result = helper(module_groups)
+    result[0].append("extra_shared")
+    result[1].append("extra_module")
+
+    assert module_groups == [["first", "second"]]
+    assert helper(module_groups) == expected
+
+
+@pytest.mark.parametrize(
+    ("attributes", "expected"),
+    [
+        ({"status": 403, "status_code": 404}, 403),
+        ({"status": None, "status_code": 404}, 404),
+        ({"response": Mock(status_code=502)}, 502),
+        ({"response": None}, None),
+        ({"response": object()}, None),
+        ({}, None),
+    ],
+)
+def test_client_exception_status(attributes, expected):
+    exception = RuntimeError("API failure")
+    for name, value in attributes.items():
+        setattr(exception, name, value)
+
+    assert proxmox.ProxmoxClient.exception_status(exception) == expected
 
 
 def test_client_is_lazy_and_cached(monkeypatch):
@@ -146,28 +233,11 @@ def test_client_is_lazy_and_cached(monkeypatch):
     assert len(calls) == 1
     assert calls[0][0] == ("proxmox.example.test",)
     assert calls[0][1] == {
-        "backend": "https",
-        "service": "PVE",
         "timeout": 5,
         "user": "root@pam",
         "password": "password-value",
         "verify_ssl": True,
     }
-
-
-def test_https_uses_api_user_when_both_user_options_are_configured(monkeypatch):
-    calls = []
-
-    def fake_api(*args, **kwargs):
-        calls.append((args, kwargs))
-        return object()
-
-    monkeypatch.setattr(proxmox, "ProxmoxAPI", fake_api)
-    params = connection_params(ssh_user="root")
-
-    proxmox.ProxmoxClient(FakeModule(params)).get_api()
-
-    assert calls[0][1]["user"] == "root@pam"
 
 
 def test_https_token_supports_pbs_ca_and_full_token_identifier(monkeypatch):
@@ -184,17 +254,15 @@ def test_https_token_supports_pbs_ca_and_full_token_identifier(monkeypatch):
             api_password=None,
             api_token_id="backup@pbs!automation",
             api_token_secret="token-value",
-            api_service="PBS",
             api_port=8007,
             ca_path="/etc/pki/proxmox-ca.pem",
         )
     )
 
-    proxmox.ProxmoxClient(module).get_api()
+    proxmox.ProxmoxClient(module, service="pbs").get_api()
 
     assert calls[0][1] == {
-        "backend": "https",
-        "service": "PBS",
+        "service": "pbs",
         "timeout": 5,
         "port": 8007,
         "user": "backup@pbs",
@@ -229,85 +297,97 @@ def test_pve_role_validation_checks_all_propagated_role_privileges(permissions, 
         client.validate_pve_permissions(api, "/vms")
 
 
-def test_pve_role_validation_fails_closed_when_permissions_unavailable():
+@pytest.mark.parametrize("response", [{}, {"/vms": {}}])
+def test_pve_role_validation_reports_no_permissions_as_authorization_failure(monkeypatch, response):
     module = FakeModule(connection_params())
-    api = FakePveApi(permission_error=RuntimeError("permission endpoint unavailable"))
+    api = FakePveApi(roles=[{"roleid": "Administrator", "privs": "VM.Audit,VM.Allocate"}])
+    monkeypatch.setattr(api.access.permissions, "get", lambda path: response)
+    client = proxmox.ProxmoxClient(module)
+
+    with pytest.raises(FailJson) as failure:
+        client.validate_pve_permissions(api, "/vms")
+
+    assert failure.value.result["msg"] == (
+        "Authenticated identity lacks full Administrator permissions propagated on /vms; "
+        "missing: VM.Allocate, VM.Audit."
+    )
+
+
+@pytest.mark.parametrize("response", [None, [], "invalid", {"/vms": None}, {"/vms": []}, {"/storage": {}}])
+def test_pve_role_validation_reports_unexpected_permission_responses(monkeypatch, response):
+    module = FakeModule(connection_params())
+    api = FakePveApi(roles=[{"roleid": "Administrator", "privs": "VM.Audit"}])
+    monkeypatch.setattr(api.access.permissions, "get", lambda path: response)
+    client = proxmox.ProxmoxClient(module)
+
+    with pytest.raises(FailJson) as failure:
+        client.validate_pve_permissions(api, "/vms")
+
+    assert failure.value.result["msg"] == (
+        "Unexpected PVE permissions response for role Administrator on /vms."
+    )
+
+
+def test_pve_role_validation_caches_roles_per_client():
+    module = FakeModule(connection_params())
+    api = FakePveApi(
+        permissions={"VM.Audit": True},
+        roles=[{"roleid": "Administrator", "privs": "VM.Audit"}],
+    )
+    client = proxmox.ProxmoxClient(module)
+    paths = ["/vms", "/sdn/zones", "/storage"]
+
+    for path in paths:
+        client.validate_pve_permissions(api, path)
+
+    assert api.access.roles.calls == 1
+    assert api.access.permissions.paths == paths
+
+    proxmox.ProxmoxClient(module).validate_pve_permissions(api, "/vms")
+
+    assert api.access.roles.calls == 2
+
+
+def test_pve_role_validation_rechecks_permissions_with_cached_roles():
+    module = FakeModule(connection_params())
+    api = FakePveApi(
+        permissions={"VM.Audit": True},
+        roles=[{"roleid": "Administrator", "privs": "VM.Audit"}],
+    )
+    client = proxmox.ProxmoxClient(module)
+    client.validate_pve_permissions(api, "/vms")
+    api.permissions = {}
+
+    with pytest.raises(FailJson) as failure:
+        client.validate_pve_permissions(api, "/storage")
+
+    assert "missing: VM.Audit" in failure.value.result["msg"]
+    assert api.access.roles.calls == 1
+    assert api.access.permissions.paths == ["/vms", "/storage"]
+
+
+@pytest.mark.parametrize("endpoint_error", ["permission_error", "role_error"])
+@pytest.mark.parametrize("status_code", [None, 403, 500])
+def test_pve_role_validation_fails_closed_when_permissions_unavailable(endpoint_error, status_code):
+    module = FakeModule(connection_params())
+    exception = RuntimeError("permission endpoint unavailable")
+    if status_code is not None:
+        exception.status_code = status_code
+    api = FakePveApi(**{endpoint_error: exception})
     client = proxmox.ProxmoxClient(module)
 
     with pytest.raises(FailJson) as failure:
         client.validate_pve_permissions(api, "/vms")
 
     assert "Unable to verify effective PVE permissions" in failure.value.result["msg"]
-
-
-@pytest.mark.parametrize("service", ["PVE", "PBS"])
-def test_openssh_options_support_both_services(monkeypatch, service):
-    calls = []
-
-    def fake_api(*args, **kwargs):
-        calls.append((args, kwargs))
-        return object()
-
-    monkeypatch.setattr(proxmox, "ProxmoxAPI", fake_api)
-    monkeypatch.setattr(proxmox, "OPENSSH_WRAPPER_IMPORT_ERROR", None)
-    module = FakeModule(
-        connection_params(
-            ssh_user="root",
-            api_password=None,
-            api_service=service,
-            api_backend="openssh",
-            api_port=8006,
-            ssh_port=2222,
-            ssh_config_file="/tmp/ssh-config",
-            ssh_identity_file="/tmp/id_ed25519",
-            ssh_forward_agent=True,
-        )
-    )
-
-    proxmox.ProxmoxClient(module).get_api()
-
-    assert calls[0][1] == {
-        "backend": "openssh",
-        "service": service,
-        "timeout": 5,
-        "port": 2222,
-        "user": "root",
-        "config_file": "/tmp/ssh-config",
-        "identity_file": "/tmp/id_ed25519",
-        "forward_ssh_agent": True,
-    }
-
-
-def test_openssh_uses_ssh_user_instead_of_https_user(monkeypatch):
-    calls = []
-
-    def fake_api(*args, **kwargs):
-        calls.append((args, kwargs))
-        return object()
-
-    monkeypatch.setattr(proxmox, "ProxmoxAPI", fake_api)
-    monkeypatch.setattr(proxmox, "OPENSSH_WRAPPER_IMPORT_ERROR", None)
-    params = connection_params(
-        api_user="root@pam",
-        ssh_user="root",
-        api_password=None,
-        api_backend="openssh",
-    )
-
-    proxmox.ProxmoxClient(FakeModule(params)).get_api()
-
-    assert calls[0][1]["user"] == "root"
-
-
-def test_openssh_requires_dedicated_ssh_user():
-    client = proxmox.ProxmoxClient(
-        FakeModule(connection_params(api_password=None, api_backend="openssh"))
-    )
-
-    with pytest.raises(FailJson) as failure:
-        client.connection_options()
-
-    assert "ssh_user is required" in failure.value.result["msg"]
+    assert "role Administrator on /vms" in failure.value.result["msg"]
+    assert failure.value.result["msg"].endswith("permission endpoint unavailable")
+    assert failure.value.result["api_error"] == "permission endpoint unavailable"
+    assert failure.value.result["error_type"] == "RuntimeError"
+    if status_code is None:
+        assert "status_code" not in failure.value.result
+    else:
+        assert failure.value.result["status_code"] == status_code
 
 
 @pytest.mark.parametrize(
@@ -316,30 +396,12 @@ def test_openssh_requires_dedicated_ssh_user():
         ({"api_token_id": "token", "api_token_secret": "secret"}, "Provide exactly one"),
         ({"api_password": None}, "Provide exactly one"),
         (
-            {"api_backend": "openssh", "ssh_user": "root"},
-            "cannot be used with the OpenSSH backend",
-        ),
-        (
             {"api_password": None, "api_token_id": "token", "api_token_secret": None},
             "api_token_secret is required",
         ),
         (
-            {
-                "api_password": None,
-                "api_backend": "openssh",
-                "ssh_user": "root",
-                "api_token_id": "token",
-                "api_token_secret": "secret",
-            },
-            "cannot be used with the OpenSSH backend",
-        ),
-        (
             {"ca_path": "/etc/pki/proxmox-ca.pem", "validate_certs": False},
             "ca_path requires validate_certs=true",
-        ),
-        (
-            {"api_backend": "openssh", "ssh_user": "root", "validate_certs": False},
-            "cannot be used with the OpenSSH backend",
         ),
     ],
 )
@@ -352,9 +414,9 @@ def test_invalid_authentication_combinations_fail(updates, message):
     assert message in failure.value.result["msg"]
 
 
-def test_client_failure_does_not_render_third_party_exception(monkeypatch):
+def test_client_failure_appends_api_error(monkeypatch):
     def fake_api(*args, **kwargs):
-        raise RuntimeError("request contained token-value")
+        raise RuntimeError("connection refused")
 
     monkeypatch.setattr(proxmox, "ProxmoxAPI", fake_api)
     client = proxmox.ProxmoxClient(FakeModule(connection_params()))
@@ -363,7 +425,8 @@ def test_client_failure_does_not_render_third_party_exception(monkeypatch):
         client.get_api()
 
     assert failure.value.result["error_type"] == "RuntimeError"
-    assert "token-value" not in str(failure.value.result)
+    assert failure.value.result["api_error"] == "connection refused"
+    assert failure.value.result["msg"].endswith(failure.value.result["api_error"])
 
 
 @pytest.mark.parametrize(
@@ -373,15 +436,6 @@ def test_client_failure_does_not_render_third_party_exception(monkeypatch):
         ({"api_timeout": 0}, "api_timeout must be greater than zero"),
         ({"api_port": 0}, "api_port must be between 1 and 65535"),
         ({"api_port": 65536}, "api_port must be between 1 and 65535"),
-        (
-            {
-                "api_backend": "openssh",
-                "ssh_user": "root",
-                "api_password": None,
-                "ssh_port": 0,
-            },
-            "ssh_port must be between 1 and 65535",
-        ),
     ],
 )
 def test_invalid_connection_values_fail(updates, message):
@@ -426,6 +480,31 @@ class DummyResource(ProxmoxResourceModule):
         if operation == "create":
             return {"name": self.module.params["name"], "value": self.module.params["value"]}
         return super().get_check_mode_resource(operation, resource, updates)
+
+
+@pytest.mark.parametrize(
+    ("current_options", "desired_options", "expected"),
+    [
+        ({"model": "virtio", "macaddr": "auto"}, {"model": "virtio"}, True),
+        ({"firewall": "1"}, {"firewall": True}, True),
+        ({"firewall": "0"}, {"firewall": False}, True),
+        ({"firewall": True}, {"firewall": "1"}, True),
+        ({"firewall": False}, {"firewall": "0"}, True),
+        ({"firewall": True}, {"firewall": 1}, True),
+        ({"firewall": False}, {"firewall": 0}, True),
+        ({"firewall": True}, {"firewall": True}, True),
+        ({"firewall": False}, {"firewall": False}, True),
+        ({"firewall": True}, {"firewall": False}, False),
+        ({"firewall": False}, {"firewall": True}, False),
+        ({"model": "e1000"}, {"model": "virtio"}, False),
+        ({}, {"model": None}, False),
+        ({"model": "virtio"}, {}, True),
+    ],
+)
+def test_formatted_options_compare_only_requested_fields(current_options, desired_options, expected):
+    resource = DummyResource(FakeModule(), current=None)
+
+    assert resource._formatted_options_equal(current_options, desired_options) is expected
 
 
 @pytest.mark.parametrize(
@@ -490,6 +569,37 @@ class DummyAction(ProxmoxActionModule):
 
     def get_action_result(self):
         return {"status": "current"}
+
+
+@pytest.mark.parametrize(
+    ("template", "required_methods"),
+    [
+        (ProxmoxInfoModule, {"get_info"}),
+        (ProxmoxActionModule, {"perform_action"}),
+        (ProxmoxResourceModule, {"get_resource", "create_resource", "update_resource", "delete_resource"}),
+    ],
+)
+def test_lifecycle_templates_require_abstract_hooks(template, required_methods):
+    assert isabstract(template)
+    assert template.__abstractmethods__ == required_methods
+
+    with pytest.raises(TypeError, match="abstract"):
+        template(FakeModule())
+
+    for missing_method in required_methods:
+        implementations = {
+            method: lambda self, *args: None
+            for method in required_methods - {missing_method}
+        }
+        incomplete = type("IncompleteModule", (template,), implementations)
+
+        with pytest.raises(TypeError, match=missing_method):
+            incomplete(FakeModule())
+
+
+@pytest.mark.parametrize("implementation", [DummyInfo, DummyAction, DummyResource, ProxmoxTask, proxmox.ProxmoxClient])
+def test_complete_implementations_are_not_abstract(implementation):
+    assert not isabstract(implementation)
 
 
 def test_info_lifecycle_is_read_only():
@@ -565,12 +675,21 @@ class FakeClient:
     def __init__(self, api):
         self.api = api
 
-    def fail_request(self, operation, exception):
+    def fail_request(self, operation, exception, parameters=None):
         raise AssertionError("Unexpected API failure")
 
 
 class DummyTaskModule(ProxmoxTask):
     pass
+
+
+def test_wait_for_task_rejects_negative_timeout():
+    task = DummyTaskModule(FakeModule(), client=FakeClient(object()))
+
+    with pytest.raises(FailJson) as failure:
+        task.wait_for_task("UPID:pve01:00000001:00000002:task", timeout=-1)
+
+    assert failure.value.result["msg"] == "timeout must be zero or greater"
 
 
 def test_wait_for_task_returns_successful_status(monkeypatch):
@@ -582,6 +701,21 @@ def test_wait_for_task_returns_successful_status(monkeypatch):
     monkeypatch.setattr(proxmox_task.time, "sleep", lambda interval: None)
 
     result = task.wait_for_task("UPID:pve01:00000001:00000002:task", timeout=10)
+
+    assert result["exitstatus"] == "OK"
+
+
+def test_wait_for_task_zero_timeout_waits_until_task_finishes(monkeypatch):
+    statuses = [
+        {"status": "running"},
+        {"status": "running"},
+        {"status": "stopped", "exitstatus": "OK"},
+    ]
+    task = DummyTaskModule(FakeModule(), client=FakeClient(FakeTaskApi(statuses)))
+    monkeypatch.setattr(proxmox_task.time, "monotonic", Mock(side_effect=AssertionError("deadline created")))
+    monkeypatch.setattr(proxmox_task.time, "sleep", lambda interval: None)
+
+    result = task.wait_for_task("UPID:pve01:00000001:00000002:task", timeout=0)
 
     assert result["exitstatus"] == "OK"
 

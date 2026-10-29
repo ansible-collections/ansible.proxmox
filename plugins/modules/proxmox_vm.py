@@ -110,11 +110,16 @@ options:
     description:
       - Disks to create with the VM. Disk definitions are only applied during VM creation.
       - Existing VM disks are not changed or removed during updates.
+      - Each device may appear only once. The same index may be used for different device types.
     type: list
     elements: dict
     suboptions:
-      name:
-        description: Indexed Proxmox disk parameter name, such as C(scsi0) or C(scsi1).
+      device:
+        description:
+          - Proxmox disk device, such as C(scsi0) or C(virtio0).
+          - Valid ranges are C(ide0) through C(ide3), C(sata0) through C(sata5),
+            C(virtio0) through C(virtio15), and C(scsi0) through C(scsi30).
+          - C(ide2) cannot be used when the separate O(ide2) option is configured.
         type: str
         required: true
       storage:
@@ -148,15 +153,33 @@ options:
       tag:
         description: VLAN tag for this network device.
         type: int
+  task_timeout:
+    description:
+      - Maximum time in seconds to wait for each asynchronous VM create, update, or delete task.
+      - When omitted, the task-waiting function uses its default timeout of 300 seconds.
+      - Set to C(0) to wait indefinitely. Negative values are not allowed.
+      - Increase this value for large disks or slow storage when a finite timeout is preferred.
+      - Reaching this timeout fails the module but does not cancel the task on the Proxmox server.
+    type: int
   state:
-    description: Desired VM state.
+    description:
+      - Whether the VM should be created/updated or deleted.
+      - An existing VM must be powered off before applying configuration changes or deleting it.
     type: str
     choices: [present, absent]
     default: present
 extends_documentation_fragment:
   - ansible.proxmox.proxmox_base
   - ansible.proxmox.proxmox_https_options
-  - ansible.proxmox.proxmox_openssh_options
+notes:
+  - For Proxmox VE, the authenticated identity must have all privileges of the C(Administrator) role,
+    with propagation enabled, on C(/vms), C(/sdn/zones), and C(/storage).
+  - These permission checks run before VM lookup for every operation, including check mode,
+    regardless of whether the requested configuration uses SDN or storage.
+  - An existing VM must report a power state of C(stopped) before any configuration changes
+    or deletion, including in check mode. Running, paused, and suspended VMs must be powered off first.
+  - The module does not shut down or stop VMs automatically. Shut down the VM separately and wait
+    until its power state is C(stopped) before requesting configuration changes or deletion.
 """
 
 EXAMPLES = r"""
@@ -186,10 +209,10 @@ EXAMPLES = r"""
     scsihw: virtio-scsi-single
     ide2: cdrom
     disk:
-      - name: scsi0
+      - device: scsi0
         storage: local-lvm
         size: 32G
-      - name: scsi1
+      - device: scsi1
         storage: local-lvm
         size: 32G
     network:
@@ -198,9 +221,10 @@ EXAMPLES = r"""
         bridge: vmbr0
         firewall: true
         tag: 106
+    task_timeout: 900
     state: present
 
-- name: Create a default VM with https token
+- name: Create a default VM with https token with no timeout
   ansible.proxmox.proxmox_vm:
     api_host: proxmox.example.com
     api_user: root@pam
@@ -209,6 +233,7 @@ EXAMPLES = r"""
     ca_path: /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
     node: pve01
     vmid: 200
+    task_timeout: 0
 
 - name: Remove a VM
   ansible.proxmox.proxmox_vm:
@@ -221,12 +246,21 @@ EXAMPLES = r"""
 """
 
 RETURN = r"""
-result:
-  description: VM data or the Proxmox task UPID returned by a create or delete operation.
+vm:
+  description:
+    - VM configuration including the targeted VM ID as a string in C(vmid).
+    - When the VM is absent or has been deleted, contains only C(vmid).
   returned: always
-  type: raw
+  type: dict
+  sample: {"vmid": "100", "name": "my-linux-vm", "memory": 4096, "cores": 2}
+task_upid:
+  description: Proxmox task identifier for an asynchronous create, update, or delete operation.
+  returned: when the API returns an asynchronous task UPID
+  type: str
   sample: "UPID:pve01:003E0E8C:09394C3A:6ADF0AE7:qmcreate:102:ansible@pve!part:"
 """
+
+import re
 
 from ansible.module_utils.basic import AnsibleModule
 
@@ -277,6 +311,7 @@ FORMATTED_PARAMETERS = ["network", "ide2"]
 FORMATTED_PARAMETER_PREFIXES = {"network": "net"}
 FORMATTED_PARAMETER_PRIMARY_FIELDS = {"network": "model", "ide2": "device"}
 FORMATTED_PARAMETER_FIXED_OPTIONS = {"ide2": {"media": "cdrom"}}
+DISK_DEVICE_MAX_INDEX = {"ide": 3, "sata": 5, "virtio": 15, "scsi": 30}
 
 
 VM_PARAMETER_DEFAULT = {
@@ -296,6 +331,8 @@ VM_PARAMETER_DEFAULT = {
 
 
 class ProxmoxVmModule(ProxmoxResourceModule):
+    result_key = "vm"
+
     def _vm(self):
         return self.api.nodes(self.module.params["node"]).qemu(self.module.params["vmid"])
 
@@ -309,7 +346,9 @@ class ProxmoxVmModule(ProxmoxResourceModule):
             self.module.fail_json(msg="bios is ovmf but all of the following are missing: efidisk")
 
     def execute_resource_module(self):
-        self.validate_vmid()
+        vmid = self.module.params.get("vmid")
+        if vmid is not None and not 100 <= vmid <= 999999999:
+            self.module.fail_json(msg="VMID must be between 100 and 999999999.")
         self._validate_efidisk_parameters()
         super().execute_resource_module()
 
@@ -320,8 +359,8 @@ class ProxmoxVmModule(ProxmoxResourceModule):
         self.client.validate_pve_permissions(self.api, "/vms")
         self.client.validate_pve_permissions(self.api, "/sdn/zones")
         self.client.validate_pve_permissions(self.api, "/")
-        self.validate_resource("node", node, self.api.nodes.get, resource_key="node")
-        if not self.validate_resource(
+        self.validate_proxmox_resource_exist("node", node, self.api.nodes.get, resource_key="node")
+        if not self.validate_proxmox_resource_exist(
             "VM",
             vmid,
             self.api.nodes(node).qemu.get,
@@ -369,7 +408,7 @@ class ProxmoxVmModule(ProxmoxResourceModule):
 
         node = self.module.params["node"]
         requested_machine = self._desired_parameters()["machine"]
-        if not self.validate_resource(
+        if not self.validate_proxmox_resource_exist(
             "machine version",
             requested_machine,
             lambda: self.api.get("nodes/{0}/capabilities/qemu/machines".format(node)),
@@ -402,17 +441,43 @@ class ProxmoxVmModule(ProxmoxResourceModule):
         )
         if self.module.params.get("bios") == "ovmf":
             parameters["efidisk0"] = self._efidisk_parameter()
+        disk_devices = set()
         for disk in self.module.params.get("disk") or []:
+            device = disk["device"]
+            match = re.fullmatch(r"(ide|sata|virtio|scsi)(0|[1-9][0-9]*)", device) if isinstance(device, str) else None
+            if match is None or int(match.group(2)) > DISK_DEVICE_MAX_INDEX[match.group(1)]:
+                self.module.fail_json(
+                    msg="Invalid disk device {0}; use ide0..ide3, sata0..sata5, virtio0..virtio15, or scsi0..scsi30.".format(device)
+                )
+            if device in disk_devices:
+                self.module.fail_json(msg="Duplicate disk device {0}.".format(device))
+            if device in parameters:
+                self.module.fail_json(msg="Disk device {0} conflicts with another VM creation parameter.".format(device))
+            disk_devices.add(device)
             size = str(disk["size"])
             size = size[:-1] if size.lower().endswith("g") else size
-            parameters[disk["name"]] = "{0}:{1}".format(disk["storage"], size)
+            parameters[device] = "{0}:{1}".format(disk["storage"], size)
         return parameters
 
     def _wait_for_task(self, result):
+        self._task_upid = None
         if not isinstance(result, str) or not result.startswith("UPID:"):
             return
+        self._task_upid = result
         task = ProxmoxTask(self.module, client=self.client)
-        task.wait_for_task(result, timeout=120)
+        if self.module.params["task_timeout"] is None:
+            task.wait_for_task(result)
+        else:
+            task.wait_for_task(result, timeout=self.module.params["task_timeout"])
+
+    def prepare_result(self, changed, resource=None, **values):
+        vm = dict(resource or {})
+        vm["vmid"] = str(self.module.params["vmid"])
+        result = super().prepare_result(changed, resource=vm, **values)
+        task_upid = getattr(self, "_task_upid", None)
+        if task_upid is not None:
+            result["task_upid"] = task_upid
+        return result
 
     def create_resource(self):
         self._validate_machine_version()
@@ -420,7 +485,7 @@ class ProxmoxVmModule(ProxmoxResourceModule):
         node = self.module.params["node"]
         disks = self.module.params.get("disk") or []
         for storage in dict.fromkeys(disk["storage"] for disk in disks):
-            self.validate_resource(
+            self.validate_proxmox_resource_exist(
                 "storage",
                 storage,
                 self.api.nodes(node).storage.get,
@@ -434,7 +499,11 @@ class ProxmoxVmModule(ProxmoxResourceModule):
             **parameters
         )
         self._wait_for_task(resource)
-        return resource or self.get_resource()
+        return self.call_api(
+            "Retrieving created VM {0} configuration on node {1}".format(self.module.params["vmid"], node),
+            self._vm().config.get,
+            current=1,
+        )
 
     def _efidisk_parameter(self):
         efidisk = self.module.params["efidisk"]
@@ -564,7 +633,7 @@ class ProxmoxVmModule(ProxmoxResourceModule):
             self._vm().delete,
         )
         self._wait_for_task(result)
-        return result
+        return None
 
     def get_check_mode_resource(self, operation, resource=None, updates=None):
         if operation == "create":
@@ -580,6 +649,7 @@ def main():
             {
                 "node": {"type": "str", "required": True},
                 "vmid": {"type": "int", "required": True},
+                "task_timeout": {"type": "int"},
                 "name": {"type": "str"},
                 "memory": {"type": "int"},
                 "cores": {"type": "int"},
@@ -616,7 +686,7 @@ def main():
                     "type": "list",
                     "elements": "dict",
                     "options": {
-                        "name": {"type": "str", "required": True},
+                        "device": {"type": "str", "required": True},
                         "storage": {"type": "str", "required": True},
                         "size": {"type": "str", "required": True},
                     },

@@ -18,25 +18,12 @@ options:
       - Uses the E(PROXMOX_HOST) environment variable when omitted.
     type: str
     required: true
-  api_service:
-    description:
-      - Proxmox API service to access.
-      - Uses the E(PROXMOX_SERVICE) environment variable when omitted.
-    type: str
-    choices: [PVE, PBS]
-    default: PVE
-  api_backend:
-    description:
-      - Transport backend used by proxmoxer.
-      - Uses the E(PROXMOX_BACKEND) environment variable when omitted.
-    type: str
-    choices: [https, openssh]
-    default: https
 notes:
-  - Explicit module parameters take precedence over their corresponding environment variables.
+  - All modules connect to the Proxmox API over HTTPS.
   - Modules require the configured identity to have the C(Administrator) role propagated.
+  - When using an API token with privilege separation enabled, both the token and its owning user
+    must have the required permissions.
   - HTTPS authentication requires either O(api_password), or both O(api_token_id) and O(api_token_secret).
-  - SSH authentication requires O(ssh_user) and an OpenSSH key or agent.
 author:
   - Ansible Eco Content Team (@eco-ansible-content)
 requirements:

@@ -4,8 +4,8 @@
 ---
 proxmox_node: pve01
 vm_storage: local-lvm
-vmid_full: 999
-vmid_defaults: 1000
+vmid_full: "{{ integration_resource_ids[0] }}"
+vmid_defaults: "{{ integration_resource_ids[1] }}"
 
 vm_full_config:
   node: "{{ proxmox_node }}"
@@ -40,7 +40,7 @@ vm_full_config:
       firewall: true
       tag: 106
   disk:
-    - name: scsi0
+    - device: scsi0
       storage: "{{ vm_storage }}"
       size: 32G
   state: present
@@ -49,7 +49,7 @@ vm_full_ovmf_config: "{{ vm_full_config | combine({'bios': 'ovmf'}) }}"
 vm_full_immutable_attempt_config: >-
   {{ vm_full_ovmf_config | combine({
     'disk': [
-      {'name': 'scsi0', 'storage': 'missing-storage', 'size': '64G'}
+      {'device': 'scsi0', 'storage': 'missing-storage', 'size': '64G'}
     ],
     'efidisk': {
       'storage': 'missing-storage',

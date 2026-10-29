@@ -16,24 +16,25 @@ restore, replication, and node services.
 ## Requirements
 
 - **Ansible Core**: `>=2.16.0`.
-- **Python**: `>=3.12`.
+- **Python**: `>=3.11`.
+- **Proxmox VE server**: version 9 is supported.
 - **Proxmox permissions**: Administrator permissions on the target objects.
-- `proxmoxer>=2.3.0` is required for all modules and backends.
-- `requests` is required when using HTTPS (`api_backend: https`).
-- `openssh_wrapper` and an OpenSSH client executable are required when using OpenSSH (`api_backend: openssh`).
+- `proxmoxer>=2.3.0` and `requests` are required for all modules.
 
-Installing the collection does not install these Python or system dependencies.
+All modules connect to the Proxmox API over HTTPS.
+
+Installing the collection does not install these Python dependencies.
 They must be available in the execution environment where the modules run. The
 collection declares them in `meta/ee-requirements.txt` and `meta/ee-bindep.txt`;
 include this metadata when building an execution environment with
-`ansible-builder`. The OpenSSH client package is `openssh-clients` on RPM-based systems.
+`ansible-builder`.
 
 ## Installation
 
 Red Hat customers should install certified collections from [Red Hat Ansible
 Automation Hub](https://console.redhat.com/ansible/automation-hub). Red Hat does
 not support installing collections from GitHub. Installing this collection
-does not require Proxmox credentials; configure API or SSH credentials when
+does not require Proxmox credentials; configure API credentials when
 running its modules.
 
 ### Installing a collection
@@ -59,9 +60,8 @@ collections:
 ### Retrieve VM information over HTTPS
 
 Use `proxmox_vm_info` to inspect VMs on a PVE node. Set `api_host` to the PVE
-hostname or address. For VM operations, set `api_service` to `PVE` (the
-default). HTTPS is the default `api_backend`. Set `api_timeout` to change the
-default five-second timeout.
+hostname or address. VM modules connect to PVE automatically over HTTPS.
+Set `api_timeout` to change the default five-second timeout.
 
 For authentication, use either `api_user` with `api_password`, or
 `api_token_id` with `api_token_secret`. A token ID may include its user as
@@ -75,34 +75,11 @@ port, which otherwise defaults to 8006 for PVE or 8007 for PBS.
 - name: Retrieve VM information from PVE
   ansible.proxmox.proxmox_vm_info:
     api_host: "{{ proxmox_api_host }}"
-    api_service: PVE
-    api_backend: https
     api_user: "{{ proxmox_api_user }}"
     api_token_id: "{{ proxmox_api_token_id }}"
     api_token_secret: "{{ vault_proxmox_api_token_secret }}"
     validate_certs: true
     ca_path: "{{ proxmox_ca_path }}"
-    node: pve01
-```
-
-### Retrieve VM information over OpenSSH
-
-OpenSSH is an alternative transport for VM operations. Set `api_backend` to
-`openssh` and provide `ssh_user`; `api_host`, `api_service`, and `api_timeout`
-retain their shared meanings. Authenticate with an SSH key or agent using
-`ssh_identity_file`, `ssh_config_file`, or `ssh_forward_agent`. Password-based
-SSH authentication is not supported by proxmoxer's OpenSSH backend. `ssh_port`
-overrides the default port 22. HTTPS credentials, OTP, and CA settings are not
-used by this backend.
-
-```yaml
-- name: Retrieve VM information over SSH
-  ansible.proxmox.proxmox_vm_info:
-    api_host: "{{ proxmox_api_host }}"
-    api_service: PVE
-    api_backend: openssh
-    ssh_user: root
-    ssh_identity_file: "{{ proxmox_ssh_identity_file }}"
     node: pve01
 ```
 
@@ -135,9 +112,8 @@ against configured Proxmox services.
 
 - Ansible Core 2.16 or later is required. CI unit tests cover Python 3.11
   through 3.13; integration CI covers Ansible Core 2.16, 2.18, 2.20, and 2.21.
-- Current live integration coverage targets Proxmox VE (PVE). The repository
-  does not declare a fixed PVE or PBS product-version support range, and there
-  is currently no PBS resource integration target.
+- Live integration coverage currently targets Proxmox VE 9. There is currently
+  no PBS resource integration target.
 
 ### Unit tests
 
@@ -161,6 +137,15 @@ checks, then run:
 ```bash
 ansible-test integration --allow-unsupported
 ```
+
+`ansible-test` loads the integration configuration automatically. The VM target
+passes its `proxmox_api_host`, `proxmox_api_port`, `proxmox_api_user`,
+`proxmox_api_password`, `proxmox_api_token_id`, `proxmox_api_token_secret`,
+`proxmox_ca_path`, and `proxmox_validate_certs` variables through
+`module_defaults` for `group/ansible.proxmox.proxmox`, including cleanup tasks.
+The generator reads environment variables only to produce this configuration;
+the tasks do not construct or inject an authentication environment. Regenerate
+older local configuration files to use the prefixed variable names.
 
 ## Contributing
 

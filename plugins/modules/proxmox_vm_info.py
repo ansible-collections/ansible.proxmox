@@ -34,7 +34,11 @@ options:
 extends_documentation_fragment:
   - ansible.proxmox.proxmox_base
   - ansible.proxmox.proxmox_https_options
-  - ansible.proxmox.proxmox_openssh_options
+notes:
+  - For Proxmox VE, the authenticated identity must have all privileges of the C(Administrator) role,
+    with propagation enabled, on C(/vms), even when retrieving information for a single VM.
+  - The module enforces this requirement before retrieving information; read-only VM privileges alone
+    do not satisfy the current permission check.
 """
 
 EXAMPLES = r"""
@@ -76,11 +80,12 @@ class ProxmoxVmInfoModule(ProxmoxInfoModule):
     result_key = "vms"
 
     def get_info(self):
-        self.validate_vmid()
-        node = self.module.params["node"]
         vmid = self.module.params.get("vmid")
+        if vmid is not None and not 100 <= vmid <= 999999999:
+            self.module.fail_json(msg="VMID must be between 100 and 999999999.")
+        node = self.module.params["node"]
         self.client.validate_pve_permissions(self.api, "/vms")
-        self.validate_resource("node", node, self.api.nodes.get, resource_key="node")
+        self.validate_proxmox_resource_exist("node", node, self.api.nodes.get, resource_key="node")
 
         if vmid is None:
             return self.call_api(
@@ -89,7 +94,7 @@ class ProxmoxVmInfoModule(ProxmoxInfoModule):
                 "nodes/{0}/qemu".format(node),
             )
 
-        if not self.validate_resource(
+        if not self.validate_proxmox_resource_exist(
             "VM",
             vmid,
             lambda: self.api.get("nodes/{0}/qemu".format(node)),

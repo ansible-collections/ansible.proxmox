@@ -8,7 +8,7 @@ __metaclass__ = type
 
 
 class ModuleDocFragment:
-    """Documentation for the Proxmox HTTPS backend."""
+    """Documentation for Proxmox HTTPS connection options."""
 
     DOCUMENTATION = r"""
 options:
@@ -35,7 +35,7 @@ options:
     type: str
   api_port:
     description:
-      - HTTPS API port used when C(api_backend=https).
+      - HTTPS API port.
       - When omitted, proxmoxer selects the service default (8006 for PVE or 8007 for PBS).
       - Uses the E(PROXMOX_PORT) environment variable when omitted.
     type: int
@@ -54,7 +54,7 @@ options:
     description:
       - CA bundle used to validate HTTPS certificates.
       - Uses the E(PROXMOX_CA_PATH) environment variable when omitted.
-      - Valid only when O(api_backend=https) and O(validate_certs=true).
+      - Valid only when O(validate_certs=true).
     type: path
   api_timeout:
       description:
