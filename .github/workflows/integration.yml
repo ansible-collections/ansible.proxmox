@@ -89,6 +89,7 @@ jobs:
           PROXMOX_TOKEN_SECRET: ${{ secrets.PROXMOX_TOKEN_SECRET }}
           PROXMOX_USER: ${{ secrets.PROXMOX_USER }}
           PROXMOX_VALIDATE_CERTS: ${{ secrets.PROXMOX_VALIDATE_CERTS }}
+          PROXMOX_CA_PATH: ${{ secrets.PROXMOX_CA_PATH }}
 
       - name: List integration targets
         env:
