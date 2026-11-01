@@ -4,6 +4,7 @@
     node: "{{ proxmox_node }}"
     vmid: "{{ item }}"
     state: absent
+    power_cycle: 'off'
   loop:
     - "{{ vmid_full }}"
     - "{{ vmid_defaults }}"

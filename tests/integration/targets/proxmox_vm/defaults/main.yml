@@ -16,7 +16,6 @@ vm_full_config:
   sockets: 2
   cpu: x86-64-v3
   machine:
-    name: pc
     type: i440fx
     version: "10.0"
   ostype: win11
@@ -59,8 +58,10 @@ vm_full_immutable_attempt_config: >-
   }) }}
 vm_full_network_update_config: >-
   {{ vm_full_ovmf_config | combine({
+    'vga': 'qxl',
+    'scsihw': 'virtio-scsi-single',
     'network': [
-      {'name': 'net0', 'model': 'e1000e', 'bridge': 'vmbr0', 'firewall': false, 'tag': 105},
+      {'name': 'net0', 'model': 'virtio', 'bridge': 'vmbr0', 'firewall': false, 'tag': 105},
       {'name': 'net1', 'model': 'e1000e', 'bridge': 'vmbr0', 'firewall': true, 'tag': 106}
     ]
   }) }}
@@ -80,7 +81,6 @@ vm_defaults_update_config:
   sockets: 2
   cpu: x86-64-v4
   machine:
-    name: pc
     type: q35
     version: latest
   ostype: l26

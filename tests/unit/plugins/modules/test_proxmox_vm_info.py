@@ -20,15 +20,16 @@ class FakeNodes:
 
 
 class FakeApi:
-    def __init__(self, vmids=(100, 101, 102, 103)):
+    def __init__(self, vmids=(100, 101, 102, 103), vm_config=None):
         self.nodes = FakeNodes()
         self.calls = []
         self.vmids = vmids
+        self.vm_config = vm_config if vm_config is not None else {"vmid": 100, "name": "vm-test-01"}
 
     def get(self, uri, **params):
         self.calls.append((uri, params))
         if "config" in uri:
-            return {"vmid": 100, "name": "vm-test-01"}
+            return self.vm_config
         return [{"vmid": vmid} for vmid in self.vmids]
 
 
@@ -70,7 +71,30 @@ def test_vm_info_uses_explicit_proxmox_uri(params, expected_uri, expected_params
     if params["vmid"] is None:
         assert len(result) == 4
     else:
-        assert result == [{"vmid": 100, "name": "vm-test-01"}]
+        assert result == [{"vmid": 100, "name": "vm-test-01", "machine": "i440fx"}]
+
+
+@pytest.mark.parametrize(
+    ("vm_config", "expected_machine"),
+    [
+        ({}, "i440fx"),
+        ({"ostype": "l26"}, "i440fx"),
+        ({"machine": "q35"}, "q35"),
+        ({"machine": "pc-i440fx-10.2"}, "pc-i440fx-10.2"),
+    ],
+)
+def test_vm_info_reports_default_machine_without_mutating_api_config(vm_config, expected_machine):
+    original = dict(vm_config)
+    info = ProxmoxVmInfoModule(
+        SimpleNamespace(params={"node": "pve01", "vmid": 100}),
+        client=FakeClient(FakeApi(vm_config=vm_config)),
+    )
+
+    result = info.get_info()
+
+    assert result == [dict(vm_config, machine=expected_machine)]
+    assert result[0] is not vm_config
+    assert vm_config == original
 
 
 def test_vm_info_returns_empty_list_for_unknown_vmid():

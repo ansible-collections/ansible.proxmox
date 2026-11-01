@@ -227,6 +227,9 @@
     - name: Assert full VM network changes
       ansible.builtin.assert:
         that:
+          - vm_full_network_info.vms[0].vga == vm_full_network_update_config.vga
+          - vm_full_network_info.vms[0].scsihw == vm_full_network_update_config.scsihw
+          - "'virtio=' in vm_full_network_info.vms[0].net0"
           - "'tag=105' in vm_full_network_info.vms[0].net0"
           - "'firewall=0' in vm_full_network_info.vms[0].net0"
           - "'tag=106' in vm_full_network_info.vms[0].net1"
@@ -240,11 +243,15 @@
         that:
           - vm_full_network_again is not changed
 
+    - name: Exercise full VM power-state transitions
+      ansible.builtin.include_tasks: powerstate.yml
+
     - name: Create defaults VM with only its name and VMID configured
       ansible.proxmox.proxmox_vm: &vm_defaults_args
         node: "{{ vm_defaults_config.node }}"
         vmid: "{{ vm_defaults_config.vmid }}"
         name: "{{ vm_defaults_config.name }}"
+        power_cycle: 'on'
         state: "{{ vm_defaults_config.state }}"
       register: vm_defaults_create
 
@@ -274,6 +281,18 @@
       ansible.builtin.assert:
         that:
           - vm_defaults_create_again is not changed
+
+    - name: Stop defaults VM before applying offline updates
+      ansible.proxmox.proxmox_vm:
+        node: "{{ proxmox_node }}"
+        vmid: "{{ vmid_defaults }}"
+        power_cycle: 'off'
+      register: vm_defaults_stop
+
+    - name: Assert defaults VM was stopped
+      ansible.builtin.assert:
+        that:
+          - vm_defaults_stop is changed
 
     - name: Attempt OVMF update without required EFI disk settings
       ansible.proxmox.proxmox_vm: &vm_defaults_update_args
@@ -364,10 +383,31 @@
         that:
           - vm_defaults_update_again is not changed
 
+    - name: Start full VM before testing removal of a running VM
+      ansible.proxmox.proxmox_vm:
+        node: "{{ proxmox_node }}"
+        vmid: "{{ vmid_full }}"
+        power_cycle: 'on'
+
+    - name: Reject removal of running VM with default fail policy
+      ansible.proxmox.proxmox_vm:
+        node: "{{ proxmox_node }}"
+        vmid: "{{ vmid_full }}"
+        state: absent
+      check_mode: true
+      register: vm_running_delete_fail
+      ignore_errors: true
+
+    - name: Assert default policy rejects running VM removal
+      ansible.builtin.assert:
+        that:
+          - vm_running_delete_fail is failed
+
     - name: Predict full VM removal in check mode
       ansible.proxmox.proxmox_vm:
         node: "{{ proxmox_node }}"
         vmid: "{{ vmid_full }}"
+        power_cycle: 'off'
         state: absent
       check_mode: true
       register: vm_full_remove_check
@@ -392,6 +432,7 @@
       ansible.proxmox.proxmox_vm:
         node: "{{ proxmox_node }}"
         vmid: "{{ vmid_full }}"
+        power_cycle: 'off'
         state: absent
       register: vm_full_remove
 

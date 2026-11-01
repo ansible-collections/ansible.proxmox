@@ -15,7 +15,7 @@ import yaml
 from ansible_collections.ansible.proxmox.plugins.module_utils.proxmox_resource import ProxmoxResourceModule
 from ansible_collections.ansible.proxmox.plugins.module_utils.proxmox_task import ProxmoxTask
 from ansible_collections.ansible.proxmox.plugins.modules import proxmox_vm
-from ansible_collections.ansible.proxmox.plugins.modules.proxmox_vm import ProxmoxVmModule, VGA_CHOICES
+from ansible_collections.ansible.proxmox.plugins.modules.proxmox_vm import ProxmoxVmModule
 
 
 class FakeApi:
@@ -99,6 +99,7 @@ def module_params(**updates):
         "node": "pve01",
         "vmid": 100,
         "task_timeout": None,
+        "power_cycle": "fail",
         "name": None,
         "memory": None,
         "cores": None,
@@ -140,11 +141,26 @@ def test_disk_argument_and_examples_use_structured_disk_entries(monkeypatch):
     assert "scsi0" not in spec
     assert "scsi0" not in module_params()
     assert set(documentation["options"]).issubset(spec)
+    assert spec["power_cycle"]["choices"] == ["on", "off", "fail", "hotplug"]
+    assert spec["power_cycle"]["default"] == "fail"
     assert documentation["options"]["machine"]["type"] == "dict"
     assert spec["machine"]["type"] == "dict"
     assert documentation["options"]["efidisk"]["type"] == "dict"
     assert spec["efidisk"]["type"] == "dict"
+    assert documentation["options"]["vga"]["type"] == "str"
+    assert "choices" not in documentation["options"]["vga"]
+    assert spec["vga"]["type"] == "str"
+    assert "choices" not in spec["vga"]
+    assert documentation["options"]["network"]["suboptions"]["model"]["type"] == "str"
+    assert "choices" not in documentation["options"]["network"]["suboptions"]["model"]
+    assert spec["network"]["options"]["model"]["type"] == "str"
+    assert "choices" not in spec["network"]["options"]["model"]
+    assert documentation["options"]["scsihw"]["type"] == "str"
+    assert "choices" not in documentation["options"]["scsihw"]
+    assert spec["scsihw"]["type"] == "str"
+    assert "choices" not in spec["scsihw"]
     assert set(documentation["options"]["machine"]["suboptions"]) == set(spec["machine"]["options"])
+    assert set(spec["machine"]["options"]) == {"type", "version"}
     assert spec["disk"]["type"] == "list"
     assert spec["disk"]["elements"] == "dict"
     assert set(spec["disk"]["options"]) == {"device", "storage", "size"}
@@ -163,23 +179,23 @@ def test_disk_argument_and_examples_use_structured_disk_entries(monkeypatch):
     ("state", "efidisk", "should_fail"),
     [("present", None, True), ("absent", None, False), ("absent", {}, False)],
 )
-def test_ovmf_requires_efidisk_only_when_present(monkeypatch, state, efidisk, should_fail):
+def test_ovmf_requires_efidisk_only_when_present(state, efidisk, should_fail):
     module = SimpleNamespace(
-        params={"state": state, "bios": "ovmf", "efidisk": efidisk},
+        params={"state": state, "bios": "ovmf", "efidisk": efidisk, "vmid": 100},
         fail_json=Mock(side_effect=RuntimeError("module failed")),
     )
     vm = ProxmoxVmModule(module, client=FakeClient(FakeApi()))
-    execute = Mock()
-    monkeypatch.setattr(ProxmoxResourceModule, "execute_resource_module", execute)
+    vm.get_resource = Mock(side_effect=RuntimeError("lookup"))
 
     if should_fail:
         with pytest.raises(RuntimeError, match="module failed"):
             vm.execute_resource_module()
         assert "efidisk" in module.fail_json.call_args.kwargs["msg"]
-        execute.assert_not_called()
+        vm.get_resource.assert_not_called()
     else:
-        vm.execute_resource_module()
-        execute.assert_called_once_with()
+        with pytest.raises(RuntimeError, match="lookup"):
+            vm.execute_resource_module()
+        vm.get_resource.assert_called_once_with()
 
 
 @pytest.mark.parametrize("vmid", [99, 1000000000])
@@ -204,7 +220,7 @@ def test_create_omits_parameters_equal_to_api_defaults():
     assert api.config_queries == 1
     assert vm.prepare_result(changed=True, resource=result) == {
         "changed": True,
-        "vm": dict(api.created_config, vmid="100"),
+        "vm": dict(api.created_config, vmid="100", machine="i440fx"),
         "task_upid": "UPID:pve01:task",
     }
 
@@ -219,7 +235,10 @@ def test_create_without_task_upid_reads_configuration():
     result = vm.create_resource()
 
     assert result == config
-    assert vm.prepare_result(changed=True, resource=result) == {"changed": True, "vm": dict(config, vmid="100")}
+    assert vm.prepare_result(changed=True, resource=result) == {
+        "changed": True,
+        "vm": dict(config, vmid="100", machine="i440fx"),
+    }
     api.nodes.return_value.qemu.return_value.config.get.assert_called_once_with(current=1)
     api.nodes.return_value.tasks.assert_not_called()
 
@@ -240,25 +259,38 @@ def test_check_mode_creation_does_not_return_task_upid():
     vm = make_vm()
     resource = vm.get_check_mode_resource("create")
 
-    assert vm.prepare_result(changed=True, resource=resource) == {"changed": True, "vm": {"vmid": "100"}}
+    assert vm.prepare_result(changed=True, resource=resource) == {
+        "changed": True,
+        "vm": {"vmid": "100", "machine": "i440fx"},
+    }
 
 
 def test_unchanged_vm_does_not_return_task_upid():
     vm = make_vm()
     resource = {"name": "existing-vm"}
 
-    assert vm.prepare_result(changed=False, resource=resource) == {"changed": False, "vm": dict(resource, vmid="100")}
+    assert vm.prepare_result(changed=False, resource=resource) == {
+        "changed": False,
+        "vm": dict(resource, vmid="100", machine="i440fx"),
+    }
 
 
 @pytest.mark.parametrize("vmid", [100, 98672])
-@pytest.mark.parametrize("resource", [None, {}, {"name": "existing-vm"}, {"vmid": "999", "name": "existing-vm"}])
+@pytest.mark.parametrize(
+    "resource",
+    [None, {}, {"name": "existing-vm"}, {"vmid": "999", "name": "existing-vm"},
+     {"machine": "q35"}, {"machine": "pc-i440fx-10.2"}],
+)
 def test_vm_result_includes_actual_vmid_inside_vm_without_mutating_resource(vmid, resource):
     vm = make_vm(module_params(vmid=vmid))
     original = dict(resource) if resource is not None else None
 
     result = vm.prepare_result(changed=True, resource=resource)
 
-    assert result["vm"] == dict(resource or {}, vmid=str(vmid))
+    expected_vm = dict(resource or {}, vmid=str(vmid))
+    if resource is not None:
+        expected_vm.setdefault("machine", "i440fx")
+    assert result["vm"] == expected_vm
     assert set(result) == {"changed", "vm"}
     assert resource == original
 
@@ -372,6 +404,22 @@ def test_existing_vm_does_not_validate_creation_disk_storage():
     api.nodes.return_value.storage.get.assert_not_called()
 
 
+def test_hotplug_reads_pending_configuration_for_idempotency():
+    api = Mock()
+    api.nodes.get.return_value = [{"node": "pve01"}]
+    api.nodes.return_value.qemu.get.return_value = [{"vmid": 100}]
+    qemu = api.nodes.return_value.qemu.return_value
+    qemu.status.current.get.return_value = {"status": "running"}
+    qemu.config.get.return_value = {"name": "pending-name"}
+    vm = make_vm(module_params(power_cycle="hotplug", name="pending-name"), api)
+    vm.client.validate_pve_permissions = Mock()
+
+    resource = vm.get_resource()
+
+    assert vm.get_update_parameters(resource) == {}
+    qemu.config.get.assert_called_once_with()
+
+
 def test_missing_vm_is_detected_before_status_lookup():
     api = Mock()
     api.nodes.get.return_value = [{"node": "pve01"}]
@@ -419,18 +467,23 @@ def test_creation_accepts_same_disk_index_for_different_types():
 @pytest.mark.parametrize("check_mode", [False, True])
 @pytest.mark.parametrize(
     "device",
-    ["vmid", "name", "net0", "scsi", "scsi-1", "ide4", "sata6", "virtio16", "scsi31", "scsi00", "scsi1x", "scsi0 ", ""],
+    ["vmid", "name", "net0", "scsi", "scsi-1", "ide4", "sata6", "virtio16", "scsi31", "scsi00", "scsi1x", "scsi1\u0662", "scsi0 ", ""],
 )
 def test_creation_rejects_invalid_disk_devices_before_allocation(device, check_mode):
+    """Reject invalid disk devices before creating or allocating a VM.
+
+    Args:
+        device: Invalid disk device name to request.
+        check_mode: Whether to predict creation without changing the VM.
+    """
     api = FakeApi()
     vm = make_vm(module_params(disk=[{"device": device, "storage": "local-lvm", "size": "32G"}]), api)
     vm.module.fail_json = Mock(side_effect=RuntimeError("module failed"))
+    operation = vm.get_check_mode_resource if check_mode else vm.create_resource
+    arguments = ("create",) if check_mode else ()
 
     with pytest.raises(RuntimeError, match="module failed"):
-        if check_mode:
-            vm.get_check_mode_resource("create")
-        else:
-            vm.create_resource()
+        operation(*arguments)
 
     assert "Invalid disk device" in vm.module.fail_json.call_args.kwargs["msg"]
     assert api.create_parameters is None
@@ -440,6 +493,12 @@ def test_creation_rejects_invalid_disk_devices_before_allocation(device, check_m
 @pytest.mark.parametrize("check_mode", [False, True])
 @pytest.mark.parametrize("device", ["ide0", "sata0", "virtio0", "scsi0"])
 def test_creation_rejects_duplicate_disk_devices_before_allocation(device, check_mode):
+    """Reject duplicate disk devices before creating or allocating a VM.
+
+    Args:
+        device: Disk device name requested more than once.
+        check_mode: Whether to predict creation without changing the VM.
+    """
     api = FakeApi()
     disks = [
         {"device": device, "storage": "local-lvm", "size": "32G"},
@@ -447,12 +506,11 @@ def test_creation_rejects_duplicate_disk_devices_before_allocation(device, check
     ]
     vm = make_vm(module_params(disk=disks), api)
     vm.module.fail_json = Mock(side_effect=RuntimeError("module failed"))
+    operation = vm.get_check_mode_resource if check_mode else vm.create_resource
+    arguments = ("create",) if check_mode else ()
 
     with pytest.raises(RuntimeError, match="module failed"):
-        if check_mode:
-            vm.get_check_mode_resource("create")
-        else:
-            vm.create_resource()
+        operation(*arguments)
 
     assert vm.module.fail_json.call_args.kwargs["msg"] == "Duplicate disk device {0}.".format(device)
     assert api.create_parameters is None
@@ -482,7 +540,7 @@ def test_ide2_fixed_media_option_is_configured_by_vm_module(ide2):
 def test_create_keeps_non_default_parameters():
     api = FakeApi()
     params = module_params(
-        machine={"name": "pc", "type": "q35", "version": "latest"},
+        machine={"type": "q35", "version": "latest"},
         memory=4096,
         name="test-vm",
         vga="qxl",
@@ -510,7 +568,7 @@ def test_create_keeps_non_default_parameters():
 @pytest.mark.parametrize("version", ["10.0", "10.0+pve1"])
 def test_create_serializes_pinned_machine_version(version):
     api = FakeApi()
-    params = module_params(machine={"name": "pc", "type": "q35", "version": version})
+    params = module_params(machine={"type": "q35", "version": version})
 
     make_vm(params, api).create_resource()
 
@@ -521,7 +579,7 @@ def test_create_serializes_pinned_machine_version(version):
 def test_create_rejects_unsupported_machine_version_before_creating_vm():
     api = FakeApi()
     vm = make_vm(
-        module_params(machine={"name": "pc", "type": "q35", "version": "10.4"}),
+        module_params(machine={"type": "q35", "version": "10.4"}),
         api,
     )
     vm.module.fail_json = Mock(side_effect=RuntimeError("module failed"))
@@ -538,25 +596,6 @@ def test_cpu_argument_matches_api_parameter_name():
     vm = make_vm(module_params(cpu="host"))
 
     assert vm._desired_parameters() == {"cpu": "host"}
-
-
-def test_vga_choices_include_proxmox_device_types():
-    assert VGA_CHOICES == [
-        "cirrus",
-        "qxl",
-        "qxl2",
-        "qxl3",
-        "qxl4",
-        "none",
-        "serial0",
-        "serial1",
-        "serial2",
-        "serial3",
-        "std",
-        "virtio",
-        "virtio-gl",
-        "vmware",
-    ]
 
 
 def test_empty_config_values_match_parameter_defaults():
@@ -600,17 +639,17 @@ def test_numeric_config_strings_match_integer_parameters():
 @pytest.mark.parametrize(
     ("requested", "current", "expected"),
     [
-        ({"name": "pc", "type": "q35", "version": "latest"}, "pc-q35-latest", {}),
-        ({"name": "pc", "type": "q35", "version": "latest"}, "q35", {}),
-        ({"name": "pc", "type": "i440fx", "version": "latest"}, "i440fx", {}),
-        ({"name": "pc", "type": "q35", "version": "latest"}, "pc-q35-5.1", {}),
-        ({"name": "pc", "type": "i440fx", "version": "latest"}, "pc-i440fx-5.1", {}),
-        ({"name": "pc", "type": "q35", "version": "10.0"}, "pc-q35-10.0", {}),
-        ({"name": "pc", "type": "q35", "version": "10.0+pve1"}, "pc-q35-10.0+pve1", {}),
-        ({"name": "pc", "type": "q35", "version": "10.0"}, "pc-q35-10.0+pve1", {"machine": "pc-q35-10.0"}),
-        ({"name": "pc", "type": "q35", "version": "10.0+pve1"}, "pc-q35-10.0", {"machine": "pc-q35-10.0+pve1"}),
-        ({"name": "pc", "type": "i440fx", "version": "10.0+pve1"}, "pc-i440fx-10.0+pve1", {}),
-        ({"name": "pc", "type": "q35", "version": "latest"}, "pc-q35-10.0+pve1", {}),
+        ({"type": "q35", "version": "latest"}, "pc-q35-latest", {"machine": "q35"}),
+        ({"type": "q35", "version": "latest"}, "q35", {}),
+        ({"type": "i440fx", "version": "latest"}, "i440fx", {}),
+        ({"type": "q35", "version": "latest"}, "pc-q35-5.1", {"machine": "q35"}),
+        ({"type": "i440fx", "version": "latest"}, "pc-i440fx-5.1", {"delete": "machine"}),
+        ({"type": "q35", "version": "10.0"}, "pc-q35-10.0", {}),
+        ({"type": "q35", "version": "10.0+pve1"}, "pc-q35-10.0+pve1", {}),
+        ({"type": "q35", "version": "10.0"}, "pc-q35-10.0+pve1", {"machine": "pc-q35-10.0"}),
+        ({"type": "q35", "version": "10.0+pve1"}, "pc-q35-10.0", {"machine": "pc-q35-10.0+pve1"}),
+        ({"type": "i440fx", "version": "10.0+pve1"}, "pc-i440fx-10.0+pve1", {}),
+        ({"type": "q35", "version": "latest"}, "pc-q35-10.0+pve1", {"machine": "q35"}),
     ],
 )
 def test_machine_comparison_handles_latest_and_pinned_versions(requested, current, expected):
@@ -620,9 +659,26 @@ def test_machine_comparison_handles_latest_and_pinned_versions(requested, curren
 
 
 def test_machine_comparison_still_detects_chipset_change():
-    vm = make_vm(module_params(machine={"name": "pc", "type": "q35", "version": "latest"}))
+    vm = make_vm(module_params(machine={"type": "q35", "version": "latest"}))
 
     assert vm.get_update_parameters({"machine": "pc-i440fx-11.0"}) == {"machine": "q35"}
+
+
+def test_i440fx_latest_removes_machine_pin_and_is_idempotent():
+    api = FakeApi()
+    vm = make_vm(
+        module_params(machine={"type": "i440fx", "version": "latest"}, ostype="l26"),
+        api,
+    )
+    current = {"machine": "pc-i440fx-10.2", "ostype": "l26"}
+
+    updates = vm.get_update_parameters(current)
+
+    assert updates == {"delete": "machine"}
+    updated = vm.update_resource(current, updates)
+    assert api.update_parameters == {"delete": "machine"}
+    assert "machine" not in updated
+    assert vm.get_update_parameters(updated) == {}
 
 
 @pytest.mark.parametrize(
@@ -906,6 +962,205 @@ def test_update_uses_delete_for_defaults_and_updates_other_values():
     resource = {"machine": "q35", "ostype": "win10"}
 
     assert vm.get_update_parameters(resource) == {"delete": "ostype"}
+
+
+def run_power_cycle(params, status=None, resource=None, check_mode=False, monkeypatch=None):
+    """Run one VM reconciliation and record API mutations, task waits, and status checks."""
+    api = Mock()
+    qemu = api.nodes.return_value.qemu.return_value
+    events = []
+
+    def mutation(action, upid):
+
+        def invoke(**kwargs):
+            events.append((action, kwargs))
+            return upid
+
+        return invoke
+
+    api.nodes.return_value.qemu.create.side_effect = mutation("create", "UPID:pve01:create")
+    qemu.config.post.side_effect = mutation("update", "UPID:pve01:update")
+    qemu.delete.side_effect = mutation("delete", "UPID:pve01:delete")
+    qemu.status.stop.post.side_effect = mutation("stop", "UPID:pve01:stop")
+    qemu.status.start.post.side_effect = mutation("start", "UPID:pve01:start")
+
+    def current_status():
+        action = next(event[0] for event in reversed(events) if event[0] in ("start", "stop"))
+        events.append(("status", {}))
+        return {"status": "running" if action == "start" else "stopped"}
+
+    qemu.status.current.get.side_effect = current_status
+    qemu.config.get.return_value = {"memory": params.get("memory") or 512}
+    monkeypatch.setattr(
+        ProxmoxTask, "wait_for_task",
+        lambda self, upid, **kwargs: events.append(("wait", upid)),
+    )
+    vm = make_vm(module_params(**params), api)
+    vm._vm_status = status
+    vm.get_resource = Mock(return_value=resource)
+    vm.module.check_mode = check_mode
+    vm.module.fail_json = Mock(side_effect=RuntimeError("module failed"))
+    vm.module.exit_json = Mock(side_effect=SystemExit)
+
+    with pytest.raises(SystemExit):
+        vm.execute_resource_module()
+    return vm.module.exit_json.call_args.kwargs, events
+
+
+@pytest.mark.parametrize(
+    ("power_cycle", "expected"),
+    [
+        ("on", ["create", "wait", "start", "wait", "status"]),
+        ("off", ["create", "wait"]),
+        ("fail", ["create", "wait"]),
+        ("hotplug", ["create", "wait"]),
+    ],
+)
+def test_power_cycle_creation(power_cycle, expected, monkeypatch):
+    result, events = run_power_cycle({"power_cycle": power_cycle}, monkeypatch=monkeypatch)
+
+    assert result["changed"] is True
+    assert [event[0] for event in events] == expected
+    assert result["task_upid"] == ("UPID:pve01:start" if power_cycle == "on" else "UPID:pve01:create")
+
+
+@pytest.mark.parametrize(
+    ("power_cycle", "status", "memory", "expected"),
+    [
+        ("on", "running", 2048, ["stop", "wait", "status", "update", "wait", "start", "wait", "status"]),
+        ("on", "stopped", 2048, ["update", "wait", "start", "wait", "status"]),
+        ("on", "stopped", 512, ["start", "wait", "status"]),
+        ("on", "running", 512, []),
+        ("off", "running", 2048, ["stop", "wait", "status", "update", "wait"]),
+        ("off", "stopped", 2048, ["update", "wait"]),
+        ("off", "running", 512, ["stop", "wait", "status"]),
+        ("off", "stopped", 512, []),
+        ("hotplug", "running", 2048, ["update", "wait"]),
+        ("hotplug", "running", 512, []),
+        ("fail", "stopped", 2048, ["update", "wait"]),
+        ("fail", "running", 512, []),
+    ],
+)
+def test_power_cycle_update_and_idempotency(power_cycle, status, memory, expected, monkeypatch):
+    result, events = run_power_cycle(
+        {"power_cycle": power_cycle, "memory": memory},
+        status=status, resource={"memory": 512}, monkeypatch=monkeypatch,
+    )
+
+    assert [event[0] for event in events] == expected
+    assert result["changed"] is bool(expected)
+    assert result["vm"]["memory"] == (memory if expected and memory != 512 else 512)
+    if expected:
+        assert result["task_upid"] == "UPID:pve01:{0}".format(
+            next(action for action in reversed(expected) if action in ("start", "stop", "update"))
+        )
+    else:
+        assert "task_upid" not in result
+
+
+@pytest.mark.parametrize("power_cycle", ["on", "off", "fail", "hotplug"])
+def test_power_cycle_check_mode_predicts_create_without_mutation(power_cycle, monkeypatch):
+    result, events = run_power_cycle({"power_cycle": power_cycle}, check_mode=True, monkeypatch=monkeypatch)
+
+    assert result["changed"] is True
+    assert "task_upid" not in result
+    assert events == []
+
+
+@pytest.mark.parametrize("power_cycle,status,memory,changed", [
+    ("on", "running", 2048, True), ("on", "stopped", 512, True),
+    ("off", "running", 512, True), ("hotplug", "running", 2048, True),
+    ("fail", "stopped", 512, False),
+])
+def test_power_cycle_check_mode_predicts_updates_without_mutation(power_cycle, status, memory, changed, monkeypatch):
+    result, events = run_power_cycle(
+        {"power_cycle": power_cycle, "memory": memory}, status=status,
+        resource={"memory": 512}, check_mode=True, monkeypatch=monkeypatch,
+    )
+
+    assert result["changed"] is changed
+    assert result["vm"]["memory"] == (memory if changed and memory != 512 else 512)
+    assert "task_upid" not in result
+    assert events == []
+
+
+@pytest.mark.parametrize("status", ["running", "stopped"])
+def test_power_cycle_off_deletes_vm_and_waits_for_stop(status, monkeypatch):
+    result, events = run_power_cycle(
+        {"state": "absent", "power_cycle": "off"}, status=status,
+        resource={"vmid": 100}, monkeypatch=monkeypatch,
+    )
+
+    assert result["changed"] is True
+    assert result["vm"] == {"vmid": "100"}
+    assert [event[0] for event in events] == (
+        ["stop", "wait", "status", "delete", "wait"] if status == "running" else ["delete", "wait"]
+    )
+    assert result["task_upid"] == "UPID:pve01:delete"
+
+
+def test_power_cycle_off_delete_check_mode_keeps_running_vm(monkeypatch):
+    result, events = run_power_cycle(
+        {"state": "absent", "power_cycle": "off"}, status="running",
+        resource={"vmid": 100}, check_mode=True, monkeypatch=monkeypatch,
+    )
+
+    assert result["changed"] is True
+    assert events == []
+
+
+def test_power_cycle_off_absent_vm_is_idempotent(monkeypatch):
+    result, events = run_power_cycle(
+        {"state": "absent", "power_cycle": "off"}, monkeypatch=monkeypatch,
+    )
+
+    assert result["changed"] is False
+    assert events == []
+
+
+def test_default_fail_policy_rejects_running_updates_before_mutation(monkeypatch):
+    api = Mock()
+    vm = make_vm(module_params(memory=2048), api)
+    vm._vm_status = "running"
+    vm.get_resource = Mock(return_value={"memory": 512})
+    vm.module.fail_json = Mock(side_effect=RuntimeError("module failed"))
+
+    with pytest.raises(RuntimeError, match="module failed"):
+        vm.execute_resource_module()
+
+    api.nodes.return_value.qemu.return_value.config.post.assert_not_called()
+    api.nodes.return_value.qemu.return_value.status.stop.post.assert_not_called()
+
+
+@pytest.mark.parametrize("power_cycle", ["on", "hotplug"])
+@pytest.mark.parametrize("check_mode", [False, True])
+def test_power_cycle_rejects_invalid_absent_policy_before_api_lookup(power_cycle, check_mode):
+    vm = make_vm(module_params(state="absent", power_cycle=power_cycle))
+    vm.module.check_mode = check_mode
+    vm.module.fail_json = Mock(side_effect=RuntimeError("module failed"))
+    vm.get_resource = Mock()
+
+    with pytest.raises(RuntimeError, match="module failed"):
+        vm.execute_resource_module()
+
+    assert "power_cycle must be off or fail" in vm.module.fail_json.call_args.kwargs["msg"]
+    vm.get_resource.assert_not_called()
+
+
+@pytest.mark.parametrize("power_cycle", ["on", "off", "hotplug", "fail"])
+def test_power_cycle_refuses_unknown_status_before_mutation(power_cycle, monkeypatch):
+    vm = make_vm(module_params(power_cycle=power_cycle, memory=2048))
+    vm.module.check_mode = False
+    vm.module.fail_json = Mock(side_effect=RuntimeError("module failed"))
+    vm.get_resource = Mock(return_value={"memory": 512})
+    vm._vm_status = None
+    vm.update_resource = Mock()
+
+    with pytest.raises(RuntimeError, match="module failed"):
+        vm.execute_resource_module()
+
+    assert "Unable to verify VM power state" in vm.module.fail_json.call_args.kwargs["msg"]
+    vm.update_resource.assert_not_called()
 
 
 def test_update_and_check_mode_remove_deleted_default_key():

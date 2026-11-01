@@ -483,6 +483,78 @@ class DummyResource(ProxmoxResourceModule):
 
 
 @pytest.mark.parametrize(
+    ("current", "desired", "expected"),
+    [
+        (4, 4, True),
+        ("4", 4, True),
+        ("4", 5, False),
+        ("not-an-integer", 4, False),
+        ("4.5", 4.5, True),
+        ("not-a-float", 4.5, False),
+        ("1", True, False),
+        (None, 0, False),
+    ],
+)
+def test_parameter_values_equal_handles_numeric_strings(current, desired, expected):
+    """Compare values directly or by converting numeric API strings.
+
+    Args:
+        current: Existing API value to compare.
+        desired: Requested value.
+        expected: Whether the values should compare as equal.
+    """
+    assert ProxmoxResourceModule.parameter_values_equal(current, desired) is expected
+
+
+def test_serialize_formatted_entries_preserves_inputs_and_applies_fixed_options():
+    resource = DummyResource(FakeModule(), current=None)
+    entries = [
+        {"name": "net0", "model": "virtio", "firewall": True},
+        {"name": "net1", "model": "e1000"},
+    ]
+
+    assert resource._serialize_formatted_entries("network", entries, "net", "model", {"firewall": False}) == {
+        "net0": "virtio,firewall=0",
+        "net1": "e1000,firewall=0",
+    }
+    assert entries == [
+        {"name": "net0", "model": "virtio", "firewall": True},
+        {"name": "net1", "model": "e1000"},
+    ]
+    assert resource._serialize_formatted_entries("network", [], "net", "model", {}) == {}
+
+
+def test_serialize_formatted_entries_rejects_duplicate_names():
+    resource = DummyResource(FakeModule(), current=None)
+    entries = [{"name": "net0", "model": "virtio"}, {"name": "net0", "model": "e1000"}]
+
+    with pytest.raises(FailJson) as failure:
+        resource._serialize_formatted_entries("network", entries, "net", "model", {})
+
+    assert failure.value.result["msg"] == "Duplicate formatted API parameter net0."
+
+
+def test_merge_formatted_deletions_preserves_order_and_existing_updates():
+    updates = {"net0": "virtio", "delete": "scsi0,net1"}
+    deletions = ["net1", "net2", "net2", "net3"]
+
+    result = ProxmoxResourceModule._merge_formatted_deletions(updates, deletions)
+
+    assert result is updates
+    assert result == {"net0": "virtio", "delete": "scsi0,net1,net2,net3"}
+    assert deletions == ["net1", "net2", "net2", "net3"]
+
+
+def test_merge_formatted_deletions_leaves_updates_alone_when_empty():
+    updates = {"net0": "virtio", "delete": "scsi0"}
+
+    result = ProxmoxResourceModule._merge_formatted_deletions(updates, [])
+
+    assert result is updates
+    assert result == {"net0": "virtio", "delete": "scsi0"}
+
+
+@pytest.mark.parametrize(
     ("current_options", "desired_options", "expected"),
     [
         ({"model": "virtio", "macaddr": "auto"}, {"model": "virtio"}, True),
@@ -580,11 +652,18 @@ class DummyAction(ProxmoxActionModule):
     ],
 )
 def test_lifecycle_templates_require_abstract_hooks(template, required_methods):
+    """Verify lifecycle templates require their abstract hooks.
+
+    Args:
+        template: Abstract lifecycle class to inspect.
+        required_methods: Hook names subclasses must implement.
+    """
     assert isabstract(template)
     assert template.__abstractmethods__ == required_methods
+    module = FakeModule()
 
     with pytest.raises(TypeError, match="abstract"):
-        template(FakeModule())
+        template(module)
 
     for missing_method in required_methods:
         implementations = {
@@ -594,7 +673,7 @@ def test_lifecycle_templates_require_abstract_hooks(template, required_methods):
         incomplete = type("IncompleteModule", (template,), implementations)
 
         with pytest.raises(TypeError, match=missing_method):
-            incomplete(FakeModule())
+            incomplete(module)
 
 
 @pytest.mark.parametrize("implementation", [DummyInfo, DummyAction, DummyResource, ProxmoxTask, proxmox.ProxmoxClient])

@@ -61,7 +61,9 @@ EXAMPLES = r"""
 
 RETURN = r"""
 vms:
-  description: VM summaries or the selected VM configuration returned by Proxmox.
+  description:
+    - VM summaries or the selected VM configuration returned by Proxmox.
+    - Selected VM configurations include C(machine=i440fx) when the API omits the default machine.
   returned: always
   type: list
 """
@@ -108,6 +110,8 @@ class ProxmoxVmInfoModule(ProxmoxInfoModule):
             self.api.get,
             "nodes/{0}/qemu/{1}/config".format(node, vmid),
         )
+        config = dict(config)
+        config.setdefault("machine", "i440fx")
         return [config]
 
 

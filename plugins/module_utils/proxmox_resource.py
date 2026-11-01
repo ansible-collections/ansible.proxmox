@@ -148,6 +148,25 @@ class ProxmoxResourceModule(ProxmoxBase):
             options.pop("name")
             yield api_parameter, options
 
+    def _serialize_formatted_entries(self, parent, entries, prefix, primary_field, fixed_options):
+        """Serialize named entries into indexed Proxmox property strings.
+
+        Args:
+            parent: Structured parameter name.
+            entries: Named option mappings to serialize.
+            prefix: Expected API parameter prefix, or None for an exact name.
+            primary_field: Optional unkeyed option field.
+            fixed_options: Options applied to every entry.
+
+        Returns:
+            API parameter names mapped to serialized property strings.
+        """
+        serialized = {}
+        for api_parameter, options in self._formatted_entries(parent, entries, prefix):
+            options.update(fixed_options)
+            serialized[api_parameter] = self._serialize_formatted_options(options, primary_field)
+        return serialized
+
     def serialize_formatted_parameters(
         self,
         parameters,
@@ -190,16 +209,15 @@ class ProxmoxResourceModule(ProxmoxBase):
                 continue
             if not isinstance(entries, list):
                 self.module.fail_json(msg="{0} must be a list or string.".format(parent))
-            for api_parameter, options in self._formatted_entries(
-                parent,
-                entries,
-                prefixes.get(parent, parent),
-            ):
-                options.update(fixed_options.get(parent, {}))
-                serialized[api_parameter] = self._serialize_formatted_options(
-                    options,
+            serialized.update(
+                self._serialize_formatted_entries(
+                    parent,
+                    entries,
+                    prefixes.get(parent, parent),
                     primary_fields.get(parent),
+                    fixed_options.get(parent, {}),
                 )
+            )
         return serialized
 
     @staticmethod
@@ -375,6 +393,30 @@ class ProxmoxResourceModule(ProxmoxBase):
                 current_names.add(key)
         return updates, sorted(current_names - desired_names)
 
+    @staticmethod
+    def _merge_formatted_deletions(updates, deletions):
+        """Add stale parameter names to an update's delete directive in order.
+
+        Args:
+            updates: API updates to modify in place.
+            deletions: Stale parameter names to add without duplicates.
+
+        Returns:
+            The updated mapping, unchanged when deletions is empty.
+        """
+        if not deletions:
+            return updates
+
+        existing_deletions = []
+        for key in updates.get("delete", "").split(","):
+            if key:
+                existing_deletions.append(key)
+        for key in deletions:
+            if key not in existing_deletions:
+                existing_deletions.append(key)
+        updates["delete"] = ",".join(existing_deletions)
+        return updates
+
     def get_formatted_parameter_updates(
         self,
         resource,
@@ -420,7 +462,7 @@ class ProxmoxResourceModule(ProxmoxBase):
                     updates[parent] = update
                 continue
             if not isinstance(entries, list):
-                self.module.fail_json(msg="{0} must be a list.".format(parent))
+                self.module.fail_json(msg="{0} must be a list or string.".format(parent))
 
             prefix = prefixes.get(parent, parent)
             primary_field = primary_fields.get(parent)
@@ -435,16 +477,7 @@ class ProxmoxResourceModule(ProxmoxBase):
             updates.update(parent_updates)
             deletions.extend(parent_deletions)
 
-        if deletions:
-            existing_deletions = []
-            for key in updates.get("delete", "").split(","):
-                if key:
-                    existing_deletions.append(key)
-            for key in deletions:
-                if key not in existing_deletions:
-                    existing_deletions.append(key)
-            updates["delete"] = ",".join(existing_deletions)
-        return updates
+        return self._merge_formatted_deletions(updates, deletions)
 
     @staticmethod
     def parameter_values_equal(current, desired):
