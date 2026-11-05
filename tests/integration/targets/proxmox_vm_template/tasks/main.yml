@@ -1,0 +1,196 @@
+# Copyright (c) Ansible Project
+# GNU General Public License v3.0+ (see LICENSES/GPL-3.0-or-later.txt or https://www.gnu.org/licenses/gpl-3.0.txt)
+# SPDX-License-Identifier: GPL-3.0-or-later
+---
+- name: Select random VMIDs for template tests
+  ansible.builtin.set_fact:
+    template_vmid: "{{ integration_resource_ids[0] }}"
+    missing_template_vmid: "{{ integration_resource_ids[1] }}"
+
+- name: Exercise VM template modules
+  module_defaults:
+    group/ansible.proxmox.proxmox:
+      api_host: "{{ proxmox_api_host }}"
+      api_port: "{{ proxmox_api_port | default(8006) }}"
+      api_user: "{{ proxmox_api_user | default(omit, true) }}"
+      api_password: "{{ proxmox_api_password | default(omit, true) }}"
+      api_token_id: "{{ proxmox_api_token_id | default(omit, true) }}"
+      api_token_secret: "{{ proxmox_api_token_secret | default(omit, true) }}"
+      ca_path: "{{ proxmox_ca_path | default(omit, true) }}"
+      validate_certs: "{{ proxmox_validate_certs | default(true) }}"
+  block:
+    - name: Verify template VMID is unused  # noqa: args[module]
+      ansible.proxmox.proxmox_vm_info:
+        node: "{{ proxmox_node }}"
+        vmid: "{{ template_vmid }}"
+      register: template_vm_before
+
+    - name: Refuse to overwrite an existing VM
+      ansible.builtin.assert:
+        that:
+          - template_vm_before.vms | length == 0
+        fail_msg: The random template VMID is already in use; rerun the target.
+
+    - name: Verify missing-template VMID is unused  # noqa: args[module]
+      ansible.proxmox.proxmox_vm_info:
+        node: "{{ proxmox_node }}"
+        vmid: "{{ missing_template_vmid }}"
+      register: missing_template_vm_before
+
+    - name: Ensure the missing-template test uses an absent VMID
+      ansible.builtin.assert:
+        that:
+          - missing_template_vm_before.vms | length == 0
+        fail_msg: The random missing-template VMID is already in use; rerun the target.
+
+    - name: Create and start a VM with two disks  # noqa: args[module]
+      ansible.proxmox.proxmox_vm:
+        node: "{{ proxmox_node }}"
+        vmid: "{{ template_vmid }}"
+        name: "ansible-template-{{ template_vmid }}"
+        memory: 512
+        cores: 1
+        cpu: kvm64
+        ostype: l26
+        scsihw: virtio-scsi-pci
+        disk:
+          - device: scsi0
+            storage: local-lvm
+            size: 1G
+          - device: scsi1
+            storage: local-lvm
+            size: 1G
+        power_cycle: 'on'
+        state: present
+      register: template_vm_create
+
+    - name: Assert VM creation and start changed the VM
+      ansible.builtin.assert:
+        that:
+          - template_vm_create is changed
+          - template_vm_create.task_upid is defined
+
+    - name: Verify the source VM is running  # noqa: args[module]
+      ansible.proxmox.proxmox_vm_powerstate_info:
+        vmid: "{{ template_vmid }}"
+      register: template_vm_running
+
+    - name: Assert the source VM is running
+      ansible.builtin.assert:
+        that:
+          - template_vm_running.powerstate == 'running'
+
+    - name: Reject conversion of the running VM with the default power policy  # noqa: args[module]
+      ansible.proxmox.proxmox_vm_template:
+        vmid: "{{ template_vmid }}"
+      register: template_running_rejected
+      ignore_errors: true
+
+    - name: Assert running VM conversion was rejected
+      ansible.builtin.assert:
+        that:
+          - template_running_rejected is failed
+
+    - name: Verify rejected conversion left the VM running  # noqa: args[module]
+      ansible.proxmox.proxmox_vm_powerstate_info:
+        vmid: "{{ template_vmid }}"
+      register: template_vm_after_rejection
+
+    - name: Assert rejected conversion did not stop the VM
+      ansible.builtin.assert:
+        that:
+          - template_vm_after_rejection.powerstate == 'running'
+
+    - name: Predict template conversion in check mode  # noqa: args[module]
+      ansible.proxmox.proxmox_vm_template: &template_conversion_args
+        vmid: "{{ template_vmid }}"
+        disk: scsi0
+        power_cycle: 'off'
+      check_mode: true
+      register: template_conversion_check
+
+    - name: Assert template conversion is predicted
+      ansible.builtin.assert:
+        that:
+          - template_conversion_check is changed
+          - template_conversion_check.template | bool
+          - template_conversion_check.task_upid is not defined
+
+    - name: Verify check mode left the VM running  # noqa: args[module]
+      ansible.proxmox.proxmox_vm_powerstate_info:
+        vmid: "{{ template_vmid }}"
+      register: template_vm_after_check
+
+    - name: Assert check mode did not stop the VM
+      ansible.builtin.assert:
+        that:
+          - template_vm_after_check.powerstate == 'running'
+
+    - name: Stop the VM and convert scsi0 to a template base image  # noqa: args[module]
+      ansible.proxmox.proxmox_vm_template: *template_conversion_args
+      register: template_conversion_result
+
+    - name: Assert template conversion changed the VM
+      ansible.builtin.assert:
+        that:
+          - template_conversion_result is changed
+          - template_conversion_result.template | bool
+          - template_conversion_result.task_upid is defined
+
+    - name: Repeat template conversion to verify idempotency  # noqa: args[module]
+      ansible.proxmox.proxmox_vm_template: *template_conversion_args
+      register: template_conversion_repeat
+
+    - name: Assert repeated template conversion is unchanged
+      ansible.builtin.assert:
+        that:
+          - template_conversion_repeat is not changed
+          - template_conversion_repeat.template | bool
+
+    - name: Retrieve the converted template by VMID  # noqa: args[module]
+      ansible.proxmox.proxmox_vm_template_info:
+        node: "{{ proxmox_node }}"
+        vmid: "{{ template_vmid }}"
+      register: template_by_vmid
+
+    - name: Assert VMID lookup returns the template
+      ansible.builtin.assert:
+        that:
+          - template_by_vmid is not changed
+          - template_by_vmid.templates | length == 1
+          - template_by_vmid.templates[0].vmid | string == template_vmid | string
+          - template_by_vmid.templates[0].template | int == 1
+
+    - name: Retrieve all templates on the node  # noqa: args[module]
+      ansible.proxmox.proxmox_vm_template_info:
+        node: "{{ proxmox_node }}"
+      register: templates_on_node
+
+    - name: Assert the converted template is listed
+      ansible.builtin.assert:
+        that:
+          - templates_on_node is not changed
+          - templates_on_node.templates | selectattr('vmid', 'equalto', template_vmid | int) | list | length == 1
+
+    - name: Retrieve a nonexistent template VMID  # noqa: args[module]
+      ansible.proxmox.proxmox_vm_template_info:
+        node: "{{ proxmox_node }}"
+        vmid: "{{ missing_template_vmid }}"
+      register: missing_template
+
+    - name: Assert nonexistent VMID returns an empty template list
+      ansible.builtin.assert:
+        that:
+          - missing_template is not changed
+          - missing_template.templates == []
+
+  always:
+    - name: Delete the VM created by this target  # noqa: args[module]
+      ansible.proxmox.proxmox_vm:
+        node: "{{ proxmox_node }}"
+        vmid: "{{ template_vmid }}"
+        state: absent
+        power_cycle: 'off'
+      when:
+        - template_vm_create is defined
+        - template_vm_create is changed
