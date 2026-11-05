@@ -111,8 +111,18 @@ jobs:
             git fetch origin "${BASE_REF}:refs/remotes/origin/${BASE_REF}"
             git branch -f "${BASE_REF}" "origin/${BASE_REF}"
             git checkout -B "integration-pr-${PR_NUMBER}" HEAD
-            ansible-test integration --list-targets --changed \
-              --base-branch "${BASE_REF}" > targets.txt
+            git diff --name-only "origin/${BASE_REF}...HEAD" -- \
+              ':(glob)plugins/**' \
+              'requirements.txt' \
+              ':(glob)tests/integration/**' \
+              'Makefile' > "${RUNNER_TEMP}/ansible-changed-files.txt"
+            if [[ -s "${RUNNER_TEMP}/ansible-changed-files.txt" ]]; then
+              cat "${RUNNER_TEMP}/ansible-changed-files.txt"
+              ansible-test integration --list-targets --changed \
+                --base-branch "${BASE_REF}" > targets.txt
+            else
+              : > targets.txt
+            fi
           else
             ansible-test integration --list-targets > targets.txt
           fi
@@ -143,7 +153,7 @@ jobs:
         if: always()
         run: |
           rm -rf ~/venv-proxmox
-          rm -f tests/integration/integration_config.yml targets.txt
+          rm -f tests/integration/integration_config.yml targets.txt "${RUNNER_TEMP}/ansible-changed-files.txt"
 
   check:
     if: >-
