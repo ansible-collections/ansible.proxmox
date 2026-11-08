@@ -118,8 +118,8 @@ jobs:
               'Makefile' > "${RUNNER_TEMP}/ansible-changed-files.txt"
             if [[ -s "${RUNNER_TEMP}/ansible-changed-files.txt" ]]; then
               cat "${RUNNER_TEMP}/ansible-changed-files.txt"
-              ansible-test integration --list-targets --changed \
-                --base-branch "${BASE_REF}" > targets.txt
+              ansible-test integration --list-targets \
+                --changed-from "${RUNNER_TEMP}/ansible-changed-files.txt" > targets.txt
             else
               : > targets.txt
             fi
