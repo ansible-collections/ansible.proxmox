@@ -1,5 +1,7 @@
 # Ansible Proxmox Collection
 
+[![Ansible lint](https://github.com/ansible-collections/ansible.proxmox/actions/workflows/ansible-lint.yml/badge.svg?branch=main)](https://github.com/ansible-collections/ansible.proxmox/actions/workflows/ansible-lint.yml) [![Sanity](https://github.com/ansible-collections/ansible.proxmox/actions/workflows/sanity.yml/badge.svg?branch=main)](https://github.com/ansible-collections/ansible.proxmox/actions/workflows/sanity.yml) [![Units](https://github.com/ansible-collections/ansible.proxmox/actions/workflows/units.yml/badge.svg?branch=main)](https://github.com/ansible-collections/ansible.proxmox/actions/workflows/units.yml) [![SonarCloud](https://sonarcloud.io/api/project_badges/measure?project=ansible-collections_ansible.proxmox&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=ansible-collections_ansible.proxmox)
+
 Ansible automation for managing the Proxmox platform across Proxmox VE (PVE)
 and Proxmox Backup Server (PBS).
 
