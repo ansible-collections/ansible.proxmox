@@ -7,6 +7,7 @@ action_groups:
     - proxmox_pool
     - proxmox_pool_info
     - proxmox_vm
+    - proxmox_vm_clone
     - proxmox_vm_info
     - proxmox_vm_powerstate
     - proxmox_vm_powerstate_info

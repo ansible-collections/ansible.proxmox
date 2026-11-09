@@ -1,0 +1,11 @@
+---
+- name: Remove integration clone resources  # noqa: args[module]
+  ansible.proxmox.proxmox_vm:
+    node: "{{ proxmox_node }}"
+    vmid: "{{ item }}"
+    state: absent
+    power_cycle: 'off'
+  loop:
+    - "{{ clone_new_vmid }}"
+    - "{{ clone_source_vmid }}"
+  failed_when: false
