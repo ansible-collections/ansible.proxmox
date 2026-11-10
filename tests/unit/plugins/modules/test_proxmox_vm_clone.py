@@ -93,9 +93,10 @@ def test_clone_check_mode_delegates_validation_in_order(check_mode):
     handler._validate_check_mode()
 
     expected_calls = [call.options()]
+    expected_calls.append(call.destination())
     if check_mode:
         expected_calls.extend(
-            [call.destination(), call.source(), call.storage(), call.linked_clone(source)]
+            [call.source(), call.storage(), call.linked_clone(source)]
         )
     assert validators.mock_calls == expected_calls
     handler.call_api.assert_not_called()
@@ -352,7 +353,7 @@ def test_clone_check_mode_accepts_shared_target_storage(shared):
     ],
 )
 def test_clone_skips_shared_storage_checks_when_not_required(check_mode, target, storage):
-    """Restrict shared-storage preflight to check-mode cross-node destinations.
+    """Check only destination VMID in normal mode and skip irrelevant storage reads.
 
     Args:
         check_mode: Whether the clone is only being predicted.
@@ -365,7 +366,7 @@ def test_clone_skips_shared_storage_checks_when_not_required(check_mode, target,
 
     assert handler.is_action_needed() is True
 
-    assert handler.call_api.call_count == (2 if check_mode else 0)
+    assert handler.call_api.call_count == (2 if check_mode else 1)
     handler.api.storage.assert_not_called()
     handler.module.fail_json.assert_not_called()
 
@@ -390,10 +391,15 @@ def test_clone_check_mode_rejects_unknown_shared_storage_support(storage_config)
     handler.vm_resource.assert_not_called()
 
 
-def test_clone_check_mode_rejects_destination_vmid_in_use():
-    """Reject a predicted clone when its destination VMID is already used."""
+@pytest.mark.parametrize("check_mode", [False, True])
+def test_clone_rejects_destination_vmid_in_use(check_mode):
+    """Reject an occupied destination VMID in both normal and check mode.
+
+    Args:
+        check_mode (bool): Whether the clone is only being predicted.
+    """
     handler = make_clone_module()
-    handler.module.check_mode = True
+    handler.module.check_mode = check_mode
     handler.call_api.return_value = [{"vmid": "101"}]
 
     with pytest.raises(RuntimeError, match="module failed"):
@@ -401,6 +407,8 @@ def test_clone_check_mode_rejects_destination_vmid_in_use():
 
     handler.module.fail_json.assert_called_once_with(msg="VMID 101 is already in use.")
     assert handler.call_api.call_count == 1
+    handler.vm_resource.return_value.clone.post.assert_not_called()
+    handler.client.mark_changed.assert_not_called()
 
 
 @pytest.mark.parametrize("source_vms", [None, [], [{"vmid": 102}]])

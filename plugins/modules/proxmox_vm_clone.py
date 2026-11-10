@@ -156,16 +156,16 @@ class ProxmoxVmCloneModule(ProxmoxPower, ProxmoxActionModule):
         return True
 
     def _validate_check_mode(self):
-        """Validate clone options and read-only check-mode preconditions.
+        """Validate clone options and destination availability before cloning.
 
-        Reject format with explicit full=false in both modes. In real mode,
-        VMID availability, storage, and disk support errors are left to the clone API.
+        Reject format with explicit full=false in both modes. Check source,
+        storage, and linked-clone constraints only when predicting the action.
         """
         self._validate_clone_options()
+        self._validate_destination_vmid()
         if not self.module.check_mode:
             return
 
-        self._validate_destination_vmid()
         source = self._validate_source_vm()
         self._validate_target_storage()
         self._validate_linked_clone_support(source)
@@ -267,20 +267,6 @@ class ProxmoxVmCloneModule(ProxmoxPower, ProxmoxActionModule):
                 ).format(vmid, node)
             )
 
-    def _clone_fail_json(self, **failure):
-        """Shorten duplicate-VMID messages while preserving API error details.
-
-        Args:
-            **failure: Failure result fields forwarded to Ansible's original fail_json.
-
-        Raises:
-            SystemExit: After reporting the failure through Ansible.
-        """
-        api_error = failure.get("api_error")
-        if isinstance(api_error, str) and "config file already exists" in api_error.lower():
-            failure["msg"] = "VMID {0} is already in use.".format(self.module.params["newid"])
-        return self._original_fail_json(**failure)
-
     def _validate_vmids(self):
         """Validate the source and destination VMIDs before calling Proxmox."""
         vmid = self.module.params["vmid"]
@@ -307,22 +293,15 @@ class ProxmoxVmCloneModule(ProxmoxPower, ProxmoxActionModule):
         )
         if "full" in options:
             options["full"] = int(options["full"])
-        original_fail_json = self.module.fail_json
-        self._original_fail_json = original_fail_json
-        self.module.fail_json = self._clone_fail_json
-        try:
-            self._task_upid = self.call_mutation(
-                "Cloning VM {0} on node {1} as VM {2}".format(vmid, node, newid),
-                self.vm_resource().clone.post,
-                **options
-            )
-            if not isinstance(self._task_upid, str) or not self._task_upid.startswith("UPID:"):
-                self.module.fail_json(msg="VM {0} clone request did not return a task UPID.".format(vmid))
-            ProxmoxTask(self.module, client=self.client).wait_for_task(self._task_upid)
-            return self.get_action_result()
-        finally:
-            self.module.fail_json = original_fail_json
-            del self._original_fail_json
+        self._task_upid = self.call_mutation(
+            "Cloning VM {0} on node {1} as VM {2}".format(vmid, node, newid),
+            self.vm_resource().clone.post,
+            **options
+        )
+        if not isinstance(self._task_upid, str) or not self._task_upid.startswith("UPID:"):
+            self.module.fail_json(msg="VM {0} clone request did not return a task UPID.".format(vmid))
+        ProxmoxTask(self.module, client=self.client).wait_for_task(self._task_upid)
+        return self.get_action_result()
 
     def get_action_result(self):
         """Return the destination VMID for a real or predicted clone.

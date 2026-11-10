@@ -100,13 +100,12 @@
       register: clone_existing_vmid_normal
       ignore_errors: true
 
-    - name: Assert an occupied destination VMID is rejected by the API
+    - name: Assert an occupied destination VMID is rejected in normal mode
       ansible.builtin.assert:
         that:
           - clone_existing_vmid_normal is failed
           - not clone_existing_vmid_normal.changed
           - "'already in use' in clone_existing_vmid_normal.msg"
-          - clone_existing_vmid_normal.api_error is defined
 
   always:
     - name: Clean up after testing
