@@ -1,0 +1,7 @@
+---
+proxmox_node: pve01
+vm_storage: local-lvm
+clone_source_vmid: "{{ integration_resource_ids[0] }}"
+clone_new_vmid: "{{ integration_resource_ids[1] }}"
+clone_source_name: "ansible-clone-source-{{ clone_source_vmid }}"
+clone_name: "ansible-clone-{{ clone_new_vmid }}"

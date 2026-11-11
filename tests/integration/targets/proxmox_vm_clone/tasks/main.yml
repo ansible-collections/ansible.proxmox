@@ -1,0 +1,112 @@
+---
+- name: Exercise VM cloning
+  module_defaults:
+    group/ansible.proxmox.proxmox:
+      api_host: "{{ proxmox_api_host }}"
+      api_port: "{{ proxmox_api_port | default(8006) }}"
+      api_user: "{{ proxmox_api_user | default(omit, true) }}"
+      api_password: "{{ proxmox_api_password | default(omit, true) }}"
+      api_token_id: "{{ proxmox_api_token_id | default(omit, true) }}"
+      api_token_secret: "{{ proxmox_api_token_secret | default(omit, true) }}"
+      ca_path: "{{ proxmox_ca_path | default(omit, true) }}"
+      validate_certs: "{{ proxmox_validate_certs | default(true) }}"
+  block:
+    - name: Clean up before testing
+      ansible.builtin.include_tasks: cleanup.yml
+
+    - name: Create source VM  # noqa: args[module]
+      ansible.proxmox.proxmox_vm:
+        node: "{{ proxmox_node }}"
+        vmid: "{{ clone_source_vmid }}"
+        name: "{{ clone_source_name }}"
+        memory: 512
+        disk:
+          - device: scsi0
+            storage: "{{ vm_storage }}"
+            size: 8G
+      register: clone_source
+
+    - name: Assert source VM was created
+      ansible.builtin.assert:
+        that:
+          - clone_source is changed
+
+    - name: Predict clone in check mode  # noqa: args[module]
+      ansible.proxmox.proxmox_vm_clone: &clone_args
+        node: "{{ proxmox_node }}"
+        vmid: "{{ clone_source_vmid }}"
+        newid: "{{ clone_new_vmid }}"
+        name: "{{ clone_name }}"
+        task_timeout: 900
+      check_mode: true
+      register: clone_check_mode
+
+    - name: Assert check mode reports the predicted clone
+      ansible.builtin.assert:
+        that:
+          - clone_check_mode is changed
+          - clone_check_mode.clone.vmid | int == clone_new_vmid | int
+
+    - name: Verify check mode did not create the clone  # noqa: args[module]
+      ansible.proxmox.proxmox_vm_info:
+        node: "{{ proxmox_node }}"
+        vmid: "{{ clone_new_vmid }}"
+      register: clone_after_check_mode
+
+    - name: Assert clone remains absent after check mode
+      ansible.builtin.assert:
+        that:
+          - clone_after_check_mode.vms | length == 0
+
+    - name: Clone the VM  # noqa: args[module]
+      ansible.proxmox.proxmox_vm_clone: *clone_args
+      register: clone_result
+
+    - name: Assert clone completed with a task UPID
+      ansible.builtin.assert:
+        that:
+          - clone_result is changed
+          - clone_result.clone.vmid | int == clone_new_vmid | int
+          - clone_result.task_upid is search('^UPID:')
+
+    - name: Retrieve cloned VM  # noqa: args[module]
+      ansible.proxmox.proxmox_vm_info:
+        node: "{{ proxmox_node }}"
+        vmid: "{{ clone_new_vmid }}"
+      register: clone_info
+
+    - name: Assert clone exists with the requested name
+      ansible.builtin.assert:
+        that:
+          - clone_info.vms | length == 1
+          - clone_info.vms[0].name == clone_name
+
+    - name: Reject a repeated clone request in check mode  # noqa: args[module]
+      ansible.proxmox.proxmox_vm_clone: *clone_args
+      check_mode: true
+      register: clone_existing_vmid
+      ignore_errors: true
+
+    - name: Assert an occupied destination VMID is rejected
+      ansible.builtin.assert:
+        that:
+          - clone_existing_vmid is failed
+          - not clone_existing_vmid.changed
+          - "'already in use' in clone_existing_vmid.msg"
+
+    - name: Reject a repeated clone request in normal mode  # noqa: args[module]
+      ansible.proxmox.proxmox_vm_clone: *clone_args
+      check_mode: false
+      register: clone_existing_vmid_normal
+      ignore_errors: true
+
+    - name: Assert an occupied destination VMID is rejected in normal mode
+      ansible.builtin.assert:
+        that:
+          - clone_existing_vmid_normal is failed
+          - not clone_existing_vmid_normal.changed
+          - "'already in use' in clone_existing_vmid_normal.msg"
+
+  always:
+    - name: Clean up after testing
+      ansible.builtin.include_tasks: cleanup.yml
