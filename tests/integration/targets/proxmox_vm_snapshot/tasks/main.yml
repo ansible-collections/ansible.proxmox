@@ -49,7 +49,7 @@
       ansible.builtin.assert:
         that:
           - snapshot_invalid_name is failed
-          - "'snapname must start with an ASCII ' in snapshot_invalid_name.msg"
+          - "'snapname must be 2-40 ASCII characters' in snapshot_invalid_name.msg"
 
     - name: Predict snapshot creation in check mode
       ansible.proxmox.proxmox_vm_snapshot:
@@ -93,6 +93,48 @@
       ansible.builtin.assert:
         that:
           - snapshot_create is changed
+
+    - name: Create a second snapshot for list-all coverage
+      ansible.proxmox.proxmox_vm_snapshot:
+        node: "{{ proxmox_node }}"
+        vmid: "{{ vmid_snapshot }}"
+        snapname: "{{ snapshot_second_name }}"
+        description: Second snapshot for integration list testing.
+        vmstate: false
+        state: present
+      register: snapshot_second_create
+
+    - name: Assert the second snapshot was created
+      ansible.builtin.assert:
+        that:
+          - snapshot_second_create is changed
+
+    - name: List all snapshots after creating two saved snapshots
+      ansible.proxmox.proxmox_vm_snapshot_info:
+        node: "{{ proxmox_node }}"
+        vmid: "{{ vmid_snapshot }}"
+      register: snapshot_list_info
+
+    - name: Assert list-all returns both snapshots and the current entry
+      ansible.builtin.assert:
+        that:
+          - snapshot_list_info.snapshots | length == 3
+          - snapshot_name in (snapshot_list_info.snapshots | map(attribute='name') | list)
+          - snapshot_second_name in (snapshot_list_info.snapshots | map(attribute='name') | list)
+          - "'current' in (snapshot_list_info.snapshots | map(attribute='name') | list)"
+
+    - name: Delete the second snapshot after list-all coverage
+      ansible.proxmox.proxmox_vm_snapshot:
+        node: "{{ proxmox_node }}"
+        vmid: "{{ vmid_snapshot }}"
+        snapname: "{{ snapshot_second_name }}"
+        state: absent
+      register: snapshot_second_delete
+
+    - name: Assert the second snapshot was deleted
+      ansible.builtin.assert:
+        that:
+          - snapshot_second_delete is changed
 
     - name: Get snapshot information after creation
       ansible.proxmox.proxmox_vm_snapshot_info:
@@ -339,7 +381,7 @@
       ansible.proxmox.proxmox_vm_snapshot_info:
         node: "{{ proxmox_node }}"
         vmid: "{{ vmid_snapshot }}"
-        snapname: snapshot_ansible_missing
+        snapname: "{{ snapshot_name }}-missing"
       register: missing_snapshot_info
 
     - name: Assert missing snapshot information is empty

@@ -33,7 +33,7 @@ options:
     required: true
   snapname:
     description:
-      - Snapshot name, containing at least two ASCII letters, digits, or underscores and starting with a letter.
+      - Snapshot name of 2-40 ASCII characters, starting with a letter and containing only letters, digits, underscores, or hyphens.
       - The names V(current) and V(pending) are reserved by Proxmox.
     type: str
     required: true
@@ -178,9 +178,12 @@ class ProxmoxVmSnapshotModule(ProxmoxResourceModule):
         snapname = params["snapname"]
         if not 100 <= vmid <= 999999999:
             self.module.fail_json(msg="VMID must be between 100 and 999999999.")
-        if not re.fullmatch(r"[A-Za-z]\w+", snapname, flags=re.ASCII):
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]+", snapname, flags=re.ASCII) or len(snapname) > 40:
             self.module.fail_json(
-                msg="snapname must start with an ASCII letter and contain at least two letters, digits, or underscores."
+                msg=(
+                    "snapname must be 2-40 ASCII characters, start with a letter, and "
+                    "contain only letters, digits, underscores, or hyphens."
+                )
             )
         if snapname == "current" or snapname.lower() == "pending":
             self.module.fail_json(msg="snapname must not be 'current' or 'pending'.")

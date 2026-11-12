@@ -55,8 +55,15 @@ def snapshot_environment():
         client = ProxmoxClient(module)
         client._api = Mock()
         client.validate_pve_permissions = Mock()
+        client.api.nodes.get.return_value = [{"node": "pve01"}]
+        client.api.get.return_value = [{"vmid": params["vmid"]}]
         endpoint = client.api.nodes.return_value.qemu.return_value.snapshot
-        endpoint.get.return_value = snapshots if snapshots is not None else [{"name": "current"}]
+        default_snapshots = (
+            [{"name": params["snapname"]}]
+            if handler_class is ProxmoxVmSnapshotInfoModule and params["snapname"] is not None
+            else [{"name": "current"}]
+        )
+        endpoint.get.return_value = snapshots if snapshots is not None else default_snapshots
         endpoint.post.return_value = "UPID:pve01:snapshot"
         endpoint.return_value.delete.return_value = "UPID:pve01:snapshot-delete"
         endpoint.return_value.rollback.post.return_value = "UPID:pve01:snapshot-rollback"
@@ -291,9 +298,9 @@ def test_snapshot_modules_reject_invalid_vmids(snapshot_environment, handler_cla
     endpoint.get.assert_not_called()
 
 
-@pytest.mark.parametrize("snapname", ["", "a", "1a", "_aa", "bad-name", "has space", "aa\n", "éa"])
+@pytest.mark.parametrize("snapname", ["", "a", "1a", "_aa", "has space", "aa\n", "éa", "a" * 41])
 def test_snapshot_rejects_invalid_names(snapshot_environment, snapname):
-    """Enforce the minimum length and ASCII snapshot-name character rules.
+    """Enforce the length and ASCII snapshot-name character rules.
 
     Args:
         snapshot_environment (callable): Snapshot handler factory.
@@ -304,7 +311,7 @@ def test_snapshot_rejects_invalid_names(snapshot_environment, snapname):
     with pytest.raises(RuntimeError, match="module failed"):
         handler.get_resource()
 
-    assert "snapname must start with an ASCII letter" in handler.module.fail_json.call_args.kwargs["msg"]
+    assert "snapname must be 2-40 ASCII characters" in handler.module.fail_json.call_args.kwargs["msg"]
     endpoint.get.assert_not_called()
 
 
@@ -325,7 +332,10 @@ def test_snapshot_rejects_reserved_names(snapshot_environment, snapname):
     endpoint.get.assert_not_called()
 
 
-@pytest.mark.parametrize("snapname", ["ab", "A1", "Aa_2", "Current"])
+@pytest.mark.parametrize(
+    "snapname",
+    ["ab", "A1", "Aa_2", "Current", "before-upgrade", "snap_2026-11-10", "a" * 40],
+)
 def test_snapshot_accepts_valid_names(snapshot_environment, snapname):
     """Accept names satisfying the API character and length requirements.
 
@@ -508,6 +518,8 @@ def test_snapshot_info_returns_all_records(snapshot_environment, check_mode):
     assert result["snapshots"][0]["description"] == "Initial"
     assert result["snapshots"][0]["snaptime"] == 1700000000
     assert result["snapshots"][2] == records[2]
+    handler.api.nodes.get.assert_called_once_with()
+    handler.api.get.assert_called_once_with("nodes/pve01/qemu")
     endpoint.get.assert_called_once_with()
     endpoint.assert_not_called()
     endpoint.return_value.config.get.assert_not_called()
@@ -519,8 +531,8 @@ def test_snapshot_info_returns_all_records(snapshot_environment, check_mode):
     ("vmstate", "expected_vmstate"),
     [(0, False), ("0", False), (1, True), ("1", True), ("local-lvm:vm-100-state-before_upgrade", True)],
 )
-def test_snapshot_info_fetches_only_requested_configuration(snapshot_environment, check_mode, vmstate, expected_vmstate):
-    """Fetch one saved configuration directly without listing all snapshots.
+def test_snapshot_info_validates_then_fetches_requested_configuration(snapshot_environment, check_mode, vmstate, expected_vmstate):
+    """Validate VM and snapshot existence before fetching one saved configuration.
 
     Args:
         snapshot_environment (callable): Snapshot handler factory.
@@ -543,9 +555,11 @@ def test_snapshot_info_fetches_only_requested_configuration(snapshot_environment
     assert result["snapshots"] == [dict(configuration, name="before_upgrade", vmstate=expected_vmstate)]
     assert result["snapshots"][0]["vmstate"] is expected_vmstate
     assert configuration["vmstate"] == vmstate
+    handler.api.nodes.get.assert_called_once_with()
+    handler.api.get.assert_called_once_with("nodes/pve01/qemu")
     endpoint.assert_called_once_with("before_upgrade")
     endpoint.return_value.config.get.assert_called_once_with()
-    endpoint.get.assert_not_called()
+    endpoint.get.assert_called_once_with()
     endpoint.post.assert_not_called()
     endpoint.return_value.config.put.assert_not_called()
 
@@ -567,56 +581,56 @@ def test_snapshot_info_preserves_optional_config_fields(snapshot_environment, co
 
     assert handler.get_info() == expected
 
+    handler.api.nodes.get.assert_called_once_with()
+    handler.api.get.assert_called_once_with("nodes/pve01/qemu")
+    endpoint.get.assert_called_once_with()
     endpoint.return_value.config.get.assert_called_once_with()
-    endpoint.get.assert_not_called()
 
 
 @pytest.mark.parametrize("check_mode", [False, True])
-@pytest.mark.parametrize(
-    ("vmid", "snapname", "status", "message"),
-    [
-        (100, "bbba", 404, "snapshot 'bbba' does not exist"),
-        (100, "bbba", 500, "snapshot 'bbba' does not exist"),
-        (100, "bbba", 500, "500 Internal Server Error: snapshot 'bbba' does not exist"),
-        (1001, "bbb", 404, "Configuration file 'nodes/pve01/qemu-server/1001.conf' does not exist"),
-        (1001, "bbb", 500,
-         "500 Internal Server Error: Configuration file 'nodes/pve01/qemu-server/1001.conf' does not exist"),
-        (1001, None, 404, "Configuration file 'nodes/pve01/qemu-server/1001.conf' does not exist"),
-        (1001, None, 500,
-         "500 Internal Server Error: Configuration file 'nodes/pve01/qemu-server/1001.conf' does not exist"),
-    ],
-)
-def test_snapshot_info_returns_empty_for_missing_resource(snapshot_environment, check_mode, vmid, snapname, status, message):
-    """Return empty lists for missing resources using only the selected endpoint.
+@pytest.mark.parametrize("snapname", [None, "before_upgrade"])
+def test_snapshot_info_returns_empty_for_missing_vm(snapshot_environment, check_mode, snapname):
+    """Return an empty list when the VM is absent from the selected node.
 
     Args:
         snapshot_environment (callable): Snapshot handler factory.
         check_mode (bool): Whether the information request runs in check mode.
-        vmid (int): Requested VM identifier.
         snapname (str, optional): Snapshot selector, or None to list all snapshots.
-        status (int): HTTP error status returned by Proxmox.
-        message (str): Missing-VM or missing-snapshot error text returned by Proxmox.
     """
     handler, endpoint = snapshot_environment(
-        handler_class=ProxmoxVmSnapshotInfoModule, check_mode=check_mode, vmid=vmid, snapname=snapname,
+        handler_class=ProxmoxVmSnapshotInfoModule, check_mode=check_mode, vmid=1001, snapname=snapname,
     )
-    error = RuntimeError(message)
-    error.status = status
-    getter = endpoint.return_value.config.get if snapname is not None else endpoint.get
-    getter.side_effect = error
+    handler.api.get.return_value = []
 
     with pytest.raises(SystemExit):
         handler.execute_info_module()
 
     handler.module.exit_json.assert_called_once_with(changed=False, snapshots=[])
     handler.module.fail_json.assert_not_called()
-    getter.assert_called_once_with()
-    if snapname is not None:
-        endpoint.assert_called_once_with(snapname)
-        endpoint.get.assert_not_called()
-    else:
-        endpoint.assert_not_called()
-        endpoint.return_value.config.get.assert_not_called()
+    handler.api.nodes.get.assert_called_once_with()
+    handler.api.get.assert_called_once_with("nodes/pve01/qemu")
+    endpoint.get.assert_not_called()
+    endpoint.return_value.config.get.assert_not_called()
+
+
+@pytest.mark.parametrize("check_mode", [False, True])
+def test_snapshot_info_returns_empty_for_missing_snapshot(snapshot_environment, check_mode):
+    """Return an empty list when the snapshot is absent from the VM index."""
+    handler, endpoint = snapshot_environment(
+        handler_class=ProxmoxVmSnapshotInfoModule, check_mode=check_mode, snapname="missing_snapshot",
+    )
+    endpoint.get.return_value = [{"name": "current"}]
+
+    with pytest.raises(SystemExit):
+        handler.execute_info_module()
+
+    handler.module.exit_json.assert_called_once_with(changed=False, snapshots=[])
+    handler.module.fail_json.assert_not_called()
+    handler.api.nodes.get.assert_called_once_with()
+    handler.api.get.assert_called_once_with("nodes/pve01/qemu")
+    endpoint.get.assert_called_once_with()
+    endpoint.assert_not_called()
+    endpoint.return_value.config.get.assert_not_called()
 
 
 @pytest.mark.parametrize("snapname", [None, "missing_snapshot"])
@@ -654,10 +668,14 @@ def test_snapshot_info_preserves_unrelated_errors(snapshot_environment, snapname
     failure = handler.module.fail_json.call_args.kwargs
     assert failure["api_error"] == message
     assert failure["status_code"] == status
-    getter.assert_called_once_with()
+    handler.api.nodes.get.assert_called_once_with()
+    handler.api.get.assert_called_once_with("nodes/pve01/qemu")
     if snapname is not None:
-        endpoint.get.assert_not_called()
+        endpoint.get.assert_called_once_with()
+        endpoint.assert_called_once_with(snapname)
+        getter.assert_called_once_with()
     else:
+        endpoint.get.assert_called_once_with()
         endpoint.return_value.config.get.assert_not_called()
 
 

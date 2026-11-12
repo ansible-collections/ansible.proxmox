@@ -134,54 +134,42 @@ class ProxmoxVmSnapshotInfoModule(ProxmoxInfoModule):
         if not 100 <= vmid <= 999999999:
             self.module.fail_json(msg="VMID must be between 100 and 999999999.")
         self.client.validate_pve_permissions(self.api, "/vms")
+        node = params["node"]
+        self.validate_proxmox_resource_exist("node", node, self.api.nodes.get, resource_key="node")
+        if not self.validate_proxmox_resource_exist(
+            "VM",
+            vmid,
+            lambda: self.api.get("nodes/{0}/qemu".format(node)),
+            resource_key="vmid",
+            fail_on_missing=False,
+        ):
+            return []
+
         snapshot_api = self.api.nodes(params["node"]).qemu(vmid).snapshot
         snapname = params.get("snapname")
         if snapname is not None:
+            if not self.validate_proxmox_resource_exist(
+                "snapshot",
+                snapname,
+                snapshot_api.get,
+                resource_key="name",
+                fail_on_missing=False,
+            ):
+                return []
             snapshot = self.call_api(
                 "Retrieving snapshot {0} of VM {1} on node {2}".format(snapname, vmid, params["node"]),
-                self._get_snapshot_data,
                 snapshot_api(snapname).config.get,
             )
-            snapshots = [dict(snapshot, name=snapname)] if snapshot is not None else []
+            snapshots = [dict(snapshot, name=snapname)] if isinstance(snapshot, dict) else []
         else:
             snapshots = self.call_api(
                 "Retrieving snapshots of VM {0} on node {1}".format(vmid, params["node"]),
-                self._get_snapshot_data,
                 snapshot_api.get,
             ) or []
         for snapshot in snapshots:
             if "vmstate" in snapshot:
                 snapshot["vmstate"] = bool(snapshot["vmstate"]) and snapshot["vmstate"] != "0"
         return snapshots
-
-    def _get_snapshot_data(self, getter):
-        """Read snapshot data without failing for a missing VM or selected snapshot.
-
-        Args:
-            getter (callable): Snapshot list or named configuration API getter.
-
-        Returns:
-            dict, list, or None: Snapshot data, or None when the requested resource is absent.
-
-        Raises:
-            Exception: For failures other than the requested VM or snapshot being absent.
-        """
-        try:
-            return getter()
-        except Exception as exception:
-            params = self.module.params
-            missing_resources = [
-                "Configuration file 'nodes/{0}/qemu-server/{1}.conf' does not exist".format(
-                    params["node"], params["vmid"]
-                )
-            ]
-            if params.get("snapname") is not None:
-                missing_resources.append("snapshot '{0}' does not exist".format(params["snapname"]))
-            if self.client.exception_status(exception) in (404, 500) and any(
-                message in str(exception) for message in missing_resources
-            ):
-                return None
-            raise
 
 
 def main():
