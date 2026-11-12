@@ -41,17 +41,17 @@ options:
   force:
     description:
       - Allow migration with local resources.
-      - C(force=true) requires the root account.
+      - C(force=true) requires password authentication as C(root@pam); API tokens are not accepted.
     type: bool
   migration_network:
     description:
       - CIDR of the network used for migration.
-      - Requires the root account.
+      - Requires password authentication as C(root@pam); API tokens are not accepted.
     type: str
   migration_type:
     description:
       - Migration transport security mode.
-      - Requires the root account.
+      - Requires password authentication as C(root@pam); API tokens are not accepted.
     type: str
     choices: [secure, insecure]
   online:
@@ -84,7 +84,7 @@ notes:
   - The result includes the preconditions returned by Proxmox.
   - The target must appear in the precondition response's C(allowed_nodes), even when storage overrides are supplied.
   - Local CD/DVD devices prevent migration and are rejected before submission.
-  - The API identity must have the C(root) role privileges for some options of this module.
+  - O(force=true), O(migration_network), and O(migration_type) require password authentication as C(root@pam); API tokens are not accepted.
   - The API identity must have the C(Administrator) role privileges propagated on C(/vms).
 """
 
@@ -182,13 +182,13 @@ class ProxmoxVmMigrateModule(ProxmoxActionModule):
             root_only_options.append("migration_type")
 
         api_user = params.get("api_user")
-        root_realm = api_user[5:] if isinstance(api_user, str) and api_user.startswith("root@") else ""
-        if root_only_options and (not root_realm or "!" in root_realm):
+        if root_only_options and (api_user != "root@pam" or params.get("api_token_id")):
             self.module.fail_json(
-                msg="Migration options {0} require api_user to use the root account (root@<realm>).".format(
+                msg="Migration options {0} require password authentication as api_user=root@pam; API tokens are not accepted.".format(
                     ", ".join(root_only_options)
                 ),
-                required_api_user="root@<realm>",
+                required_api_user="root@pam",
+                required_authentication="api_password",
             )
 
         self.client.validate_pve_permissions(self.api, "/vms")
@@ -271,7 +271,7 @@ class ProxmoxVmMigrateModule(ProxmoxActionModule):
         if not isinstance(task_upid, str) or not task_upid.startswith("UPID:"):
             self.module.fail_json(msg="VM migration request did not return a task UPID.")
         self._task_upid = task_upid
-        ProxmoxTask(self.module, client=self.client).wait_for_task(task_upid)
+        ProxmoxTask(self.module, client=self.client).wait_for_task(task_upid, include_log_on_failure=True)
         return self.get_action_result()
 
     def get_action_result(self):

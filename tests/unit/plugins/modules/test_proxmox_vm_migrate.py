@@ -125,6 +125,14 @@ def test_migrate_rejects_negative_bwlimit(check_mode):
 
 @pytest.mark.parametrize("check_mode", [False, True])
 @pytest.mark.parametrize(
+    ("api_user", "api_token_id"),
+    [
+        ("operator@pam", None),
+        ("root@pve", None),
+        ("root@pam", "root@pam!integration"),
+    ],
+)
+@pytest.mark.parametrize(
     ("option", "value", "label"),
     [
         ("force", True, "force=true"),
@@ -133,17 +141,19 @@ def test_migrate_rejects_negative_bwlimit(check_mode):
         ("migration_type", "insecure", "migration_type"),
     ],
 )
-def test_migrate_root_options_require_root_user(check_mode, option, value, label):
-    """Reject root-only migration options for non-root users in both modes.
+def test_migrate_root_options_require_password_root(check_mode, api_user, api_token_id, option, value, label):
+    """Reject root-only options unless using password-authenticated root@pam.
 
     Args:
         check_mode (bool): Whether the request is only being predicted.
+        api_user (str): Configured API user.
+        api_token_id (str, optional): Configured API token identifier.
         option (str): Root-only migration parameter.
         value: Requested parameter value.
         label (str): Parameter label included in the error.
     """
     handler, endpoint = make_migrate_module(
-        params={"api_user": "operator@pam", option: value},
+        params={"api_user": api_user, "api_token_id": api_token_id, option: value},
         check_mode=check_mode,
     )
 
@@ -151,8 +161,9 @@ def test_migrate_root_options_require_root_user(check_mode, option, value, label
         handler.execute_action_module()
 
     handler.module.fail_json.assert_called_once_with(
-        msg="Migration options {0} require api_user to use the root account (root@<realm>).".format(label),
-        required_api_user="root@<realm>",
+        msg="Migration options {0} require password authentication as api_user=root@pam; API tokens are not accepted.".format(label),
+        required_api_user="root@pam",
+        required_authentication="api_password",
     )
     handler.client.validate_pve_permissions.assert_not_called()
     endpoint.get.assert_not_called()
@@ -181,11 +192,12 @@ def test_migrate_other_options_do_not_require_root(options):
 
 
 @pytest.mark.parametrize("migration_type", ["secure", "insecure"])
-def test_migrate_check_mode_accepts_root_only_options_for_root_in_any_realm(migration_type):
-    """Allow either migration type with a root account from any realm."""
+def test_migrate_check_mode_accepts_root_options_with_password_auth(migration_type):
+    """Allow root-only options for password-authenticated root@pam."""
     handler, endpoint = make_migrate_module(
         params={
-            "api_user": "root@pve",
+            "api_user": "root@pam",
+            "api_password": "test-password",
             "force": True,
             "migration_network": "10.46.29.128/25",
             "migration_type": migration_type,
@@ -243,7 +255,7 @@ def test_migrate_posts_options_and_waits(monkeypatch):
         targetstorage="local-lvm:shared-lvm",
         **{"with-conntrack-state": 1, "with-local-disks": 1},
     )
-    wait.assert_called_once_with("UPID:pve01:migrate")
+    wait.assert_called_once_with("UPID:pve01:migrate", include_log_on_failure=True)
     result = handler.module.exit_json.call_args.kwargs
     assert result["changed"] is True
     assert result["task_upid"] == "UPID:pve01:migrate"
