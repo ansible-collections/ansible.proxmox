@@ -316,7 +316,7 @@ def test_vm_task_wait_uses_configured_timeout(monkeypatch, parameters):
 
     vm._wait_for_task("UPID:pve01:task")
 
-    wait_for_task.assert_called_once_with("UPID:pve01:task")
+    wait_for_task.assert_called_once_with("UPID:pve01:task", include_log_on_failure=True)
 
 
 @pytest.mark.parametrize("efitype", ["2m", "4m"])
