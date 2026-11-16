@@ -50,6 +50,21 @@ def test_lxc_power_waits_and_verifies_the_lxc_endpoint():
     api.nodes.return_value.qemu.assert_not_called()
 
 
+def test_lxc_power_waits_and_verifies_the_lxc_endpoint():
+    """Use shared task waiting and state verification for LXC guests."""
+    existing, api = make_power()
+    power = ProxmoxPower(existing.module, client=existing.client, guest_type="lxc")
+    container = api.nodes.return_value.lxc.return_value
+    container.status.start.post.return_value = "UPID:pve01:start"
+    container.status.current.get.return_value = {"status": "running"}
+    api.nodes.return_value.tasks.return_value.status.get.return_value = {"status": "stopped", "exitstatus": "OK"}
+
+    assert power.set_state("start") == ("UPID:pve01:start", "running")
+    container.status.start.post.assert_called_once_with()
+    api.nodes.return_value.tasks.assert_called_once_with("UPID:pve01:start")
+    api.nodes.return_value.qemu.assert_not_called()
+
+
 def test_get_status_uses_current_qemu_endpoint():
     """Verify status retrieval uses the selected VM's current QEMU endpoint."""
     power, api = make_power()
