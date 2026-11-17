@@ -103,6 +103,22 @@ def test_creation_uses_vmid_template_and_default_root_disk():
     assert result == {"vmid": 1003, "memory": 512}
 
 
+def test_creation_from_backup_sets_restore_mode():
+    backup_volume = "local:backup/vzdump-lxc-1003-2026_11_17-12_00_00.tar.zst"
+    lxc, api, _module = make_lxc(module_params(ostemplate=backup_volume))
+    api.nodes.return_value.storage.return_value.content.get.return_value = [{"volid": backup_volume}]
+
+    lxc.create_resource()
+
+    api.nodes.return_value.lxc.create.assert_called_once_with(
+        vmid=1003,
+        ostemplate=backup_volume,
+        rootfs="local-lvm:4",
+        restore=1,
+    )
+    api.nodes.return_value.storage.return_value.content.get.assert_called_once_with(content="backup")
+
+
 def test_creation_fails_when_template_is_missing():
     lxc, api, module = make_lxc(module_params(ostemplate="missing.tar.xz"))
     api.nodes.return_value.storage.return_value.content.get.return_value = []

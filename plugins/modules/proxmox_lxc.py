@@ -206,6 +206,16 @@ EXAMPLES = r"""
     storage: local-lvm
     power_cycle: 'on'
 
+- name: Create a container from a backup archive
+  ansible.proxmox.proxmox_lxc:
+    api_host: proxmox.example.com
+    api_user: root@pam
+    api_password: "{{ vault_password }}"
+    node: pve01
+    vmid: 1005
+    ostemplate: local:backup/vzdump-lxc-100-2026_11_17-12_00_00.tar.zst
+    rootfs: local-lvm:16
+
 - name: Create a fully configured container
   ansible.proxmox.proxmox_lxc:
     api_host: proxmox.example.com
@@ -425,7 +435,7 @@ class ProxmoxLxcModule(ProxmoxGuestModule):
         """Find the requested template or backup on the selected node.
 
         Returns:
-            The matching Proxmox storage volume identifier.
+            The matching Proxmox storage volume identifier and content type.
         """
         requested = self.module.params.get("ostemplate")
         if not requested:
@@ -445,7 +455,7 @@ class ProxmoxLxcModule(ProxmoxGuestModule):
             volume_id = item.get("volid", "")
             volume_path = volume_id.partition(":")[2]
             if requested in (volume_id, volume_path) or requested_name in (volume_id.rsplit("/", 1)[-1], item.get("name")):
-                return volume_id or requested
+                return volume_id or requested, content_type
         self.module.fail_json(
             msg="OS template or backup {0} does not exist in storage {1} on node {2}.".format(requested, template_storage, self.module.params["node"])
         )
@@ -486,7 +496,9 @@ class ProxmoxLxcModule(ProxmoxGuestModule):
         )
         parameters = self.omit_default_parameters(parameters, LXC_PARAMETER_DEFAULTS)
         parameters["vmid"] = self.module.params["vmid"]
-        parameters["ostemplate"] = self._resolve_ostemplate()
+        parameters["ostemplate"], content_type = self._resolve_ostemplate()
+        if content_type == "backup":
+            parameters["restore"] = 1
         self.client.validate_pve_permissions(self.api, "/storage")
         self._validate_rootfs_storage(parameters["rootfs"])
         return parameters
