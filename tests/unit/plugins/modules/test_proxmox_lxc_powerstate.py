@@ -66,7 +66,7 @@ def test_lxc_module_entrypoints(entrypoint, check_mode, status, expected, monkey
     container.status.current.get.side_effect = current_statuses
     upid = "UPID:pve01:lxc-start"
     container.status.start.post.return_value = upid
-    client = SimpleNamespace(api=api)
+    client = SimpleNamespace(api=api, mark_changed=Mock())
     monkeypatch.setattr(proxmox_base, "ProxmoxClient", Mock(return_value=client))
     wait = Mock()
     monkeypatch.setattr(ProxmoxTask, "wait_for_task", wait)

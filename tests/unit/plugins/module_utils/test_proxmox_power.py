@@ -11,6 +11,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from ansible_collections.ansible.proxmox.plugins.module_utils.proxmox import ProxmoxClient
 from ansible_collections.ansible.proxmox.plugins.module_utils.proxmox_power import (
     ProxmoxPower,
     ProxmoxPowerstateActionModule,
@@ -547,7 +548,7 @@ def test_shared_powerstate_action_lifecycle(
     qemu.status.start.post.return_value = upid
     wait = Mock()
     monkeypatch.setattr(ProxmoxTask, "wait_for_task", wait)
-    handler = ProxmoxPowerstateActionModule(module, client=SimpleNamespace(api=api))
+    handler = ProxmoxPowerstateActionModule(module, client=SimpleNamespace(api=api, mark_changed=Mock()))
 
     with pytest.raises(SystemExit):
         handler.execute_action_module()
