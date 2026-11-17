@@ -92,6 +92,10 @@ class FakeApi:
 class FakeClient:
     def __init__(self, api):
         self.api = api
+        self.changed = False
+
+    def mark_changed(self):
+        self.changed = True
 
 
 def module_params(**updates):

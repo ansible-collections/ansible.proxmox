@@ -71,7 +71,8 @@ options:
     type: float
   cpuunits:
     description:
-      - CPU weight used by the kernel fair scheduler, from 0 to 500000.
+      - CPU weight used by the kernel fair scheduler, from 8 to 10000.
+      - This range is supported consistently on hosts using either cgroup v1 or cgroup v2.
       - The Proxmox default depends on whether the host uses cgroup v1 or cgroup v2.
     type: int
   memory:
@@ -81,7 +82,11 @@ options:
     description: Amount of swap in MiB, at least 0. Proxmox defaults to 512 MiB.
     type: int
   network:
-    description: Network interfaces to configure on the container.
+    description:
+      - Network interfaces to configure on the container.
+      - Omit this option to preserve the current network configuration.
+      - When specified, the list is authoritative; interfaces omitted from it are deleted.
+      - Use an empty list to remove all configured network interfaces.
     type: list
     elements: dict
     suboptions:
@@ -369,7 +374,7 @@ class ProxmoxLxcModule(ProxmoxGuestModule):
         for name, minimum, maximum in (
             ("cores", 1, 8192),
             ("cpulimit", 0, 8192),
-            ("cpuunits", 0, 500000),
+            ("cpuunits", 8, 10000),
             ("memory", 16, None),
             ("swap", 0, None),
         ):

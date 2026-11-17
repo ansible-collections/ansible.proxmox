@@ -14,6 +14,7 @@ import yaml
 
 from ansible_collections.ansible.proxmox.plugins.modules import proxmox_lxc
 from ansible_collections.ansible.proxmox.plugins.modules.proxmox_lxc import ProxmoxLxcModule
+from ansible_collections.ansible.proxmox.plugins.module_utils.proxmox import ProxmoxClient
 from ansible_collections.ansible.proxmox.plugins.module_utils.proxmox_task import ProxmoxTask
 
 
@@ -25,12 +26,6 @@ class ModuleExit(Exception):
 class ModuleFailure(Exception):
     def __init__(self, **result):
         self.result = result
-
-
-class FakeClient:
-    def __init__(self, api):
-        self.api = api
-        self.validate_pve_permissions = Mock()
 
 
 def module_params(**updates):
@@ -84,7 +79,10 @@ def make_lxc(params=None, api=None, check_mode=False):
         exit_json=Mock(side_effect=exit_json),
         fail_json=Mock(side_effect=ModuleFailure),
     )
-    return ProxmoxLxcModule(module, client=FakeClient(api)), api, module
+    client = ProxmoxClient(module)
+    client._api = api
+    client.validate_pve_permissions = Mock()
+    return ProxmoxLxcModule(module, client=client), api, module
 
 
 def test_creation_uses_vmid_template_and_default_root_disk():
@@ -117,6 +115,29 @@ def test_creation_from_backup_sets_restore_mode():
         restore=1,
     )
     api.nodes.return_value.storage.return_value.content.get.assert_called_once_with(content="backup")
+
+
+@pytest.mark.parametrize("cpuunits", [8, 10000])
+def test_cpuunits_portable_bounds_are_accepted(cpuunits):
+    lxc, _api, _module = make_lxc(module_params(cpuunits=cpuunits))
+
+    assert lxc._validated_request() == ("present", "fail")
+
+
+@pytest.mark.parametrize("cpuunits", [0, 1, 2, 7, 10001, 20000, 500000])
+def test_cpuunits_outside_portable_range_are_rejected(cpuunits):
+    lxc, _api, module = make_lxc(module_params(cpuunits=cpuunits))
+
+    with pytest.raises(ModuleFailure):
+        lxc._validated_request()
+
+    assert module.fail_json.call_args.kwargs["msg"] == "cpuunits must be at least 8 and at most 10000."
+
+
+def test_cpuunits_at_cgroup_v2_limit_is_idempotent_after_clamping():
+    lxc, _api, _module = make_lxc(module_params(cpuunits=10000))
+
+    assert lxc.get_update_parameters({"cpuunits": 10000}) == {}
 
 
 def test_creation_fails_when_template_is_missing():

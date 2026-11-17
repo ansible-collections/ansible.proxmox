@@ -21,6 +21,7 @@ except ImportError:
 
 from ansible.module_utils import basic
 
+from ansible_collections.ansible.proxmox.plugins.module_utils.proxmox import ProxmoxClient
 from ansible_collections.ansible.proxmox.plugins.module_utils.proxmox_guest import ProxmoxGuestModule
 from ansible_collections.ansible.proxmox.plugins.module_utils.proxmox_power import ProxmoxPower
 from ansible_collections.ansible.proxmox.plugins.modules.proxmox_lxc import ProxmoxLxcModule
@@ -164,7 +165,9 @@ def guest_environment(monkeypatch):
         container.status.start.post.side_effect = lambda: power_action("start")
         container.status.stop.post.side_effect = lambda: power_action("stop")
         node.tasks.side_effect = task_endpoint
-        client = SimpleNamespace(api=api, validate_pve_permissions=Mock())
+        client = ProxmoxClient(module)
+        client._api = api
+        client.validate_pve_permissions = Mock()
         guest_class = ProxmoxLxcModule if guest_type == "lxc" else ProxmoxVmModule
         return SimpleNamespace(
             handler=guest_class(module, client=client),
@@ -290,6 +293,27 @@ def test_shared_guest_creation(guest_environment, capsys, guest_type, policy, ch
     result = reconcile(environment, capsys)
     assert result["changed"] is True
     assert environment.events == ([] if check_mode else ["create", "wait:create"] + (["start", "wait:start"] if policy == "on" else []))
+
+
+@pytest.mark.parametrize("guest_type", ["qemu", "lxc"])
+def test_creation_read_failure_reports_confirmed_mutation(guest_environment, capsys, guest_type):
+    """Retain changed=true when creation succeeds but reading config fails.
+
+    Args:
+        guest_environment: Stateful API factory.
+        capsys: Ansible JSON output capture.
+        guest_type: QEMU or LXC API family.
+    """
+    environment = guest_environment(guest_type, exists=False)
+    environment.container.config.get.side_effect = RuntimeError("configuration read failed")
+
+    result = reconcile(environment, capsys)
+
+    assert result["failed"] is True
+    assert result["changed"] is True
+    assert result["api_error"] == "configuration read failed"
+    assert environment.state["exists"] is True
+    assert environment.events == ["create", "wait:create"]
 
 
 @pytest.mark.parametrize("guest_type", ["qemu", "lxc"])

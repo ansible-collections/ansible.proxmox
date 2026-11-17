@@ -155,7 +155,11 @@ class ProxmoxGuestModule(ProxmoxResourceModule):
         node = self.module.params["node"]
         vmid = self.module.params["vmid"]
         label = self.power.guest_label
-        result = self.call_api("Creating {0} {1} on node {2}".format(label, vmid, node), getattr(self.api.nodes(node), self.guest_type).create, **parameters)
+        result = self.call_mutation(
+            "Creating {0} {1} on node {2}".format(label, vmid, node),
+            getattr(self.api.nodes(node), self.guest_type).create,
+            **parameters
+        )
         self._wait_for_task(result)
         return self.call_api(
             "Retrieving created {0} {1} configuration on node {2}".format(label, vmid, node),
@@ -173,7 +177,7 @@ class ProxmoxGuestModule(ProxmoxResourceModule):
         Returns:
             The predicted configuration after applying the updates.
         """
-        result = self.call_api(
+        result = self.call_mutation(
             "Updating {0} {1} on node {2}".format(self.power.guest_label, self.module.params["vmid"], self.module.params["node"]),
             getattr(self._guest().config, self.config_update_method),
             **updates
@@ -191,7 +195,7 @@ class ProxmoxGuestModule(ProxmoxResourceModule):
             None after successful deletion.
         """
         self.power.require_stopped(getattr(self, "_vm_status", None), "delete")
-        result = self.call_api(
+        result = self.call_mutation(
             "Deleting {0} {1} from node {2}".format(self.power.guest_label, self.module.params["vmid"], self.module.params["node"]),
             self._guest().delete,
         )

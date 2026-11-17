@@ -273,15 +273,15 @@ class ProxmoxPower(ProxmoxBase):
         node = self.node()
         endpoint = "suspend" if action in ("pause", "hibernate") else action
         options = {"todisk": 1} if action == "hibernate" else {}
-        result = self.call_api(
+        result = self.call_mutation(
             "{0} {1} {2} on node {3}".format(action.capitalize(), self.guest_label, vmid, node), getattr(self.vm_resource().status, endpoint).post, **options
         )
         if not isinstance(result, str) or not result.startswith("UPID:"):
-            self.module.fail_json(msg="{0} {1} did not return a task UPID.".format(self.guest_label, action))
+            self.client.fail_request("{0} {1} did not return a task UPID.".format(self.guest_label, action))
         task = ProxmoxTask(self.module, client=self.client)
         task.wait_for_task(result, include_log_on_failure=True)
         status = self.get_powerstate()
         expected = self.POWER_STATES[action]
         if status != expected:
-            self.module.fail_json(msg="{0} {1} did not reach the {2} state.".format(self.guest_label, vmid, expected))
+            self.client.fail_request("{0} {1} did not reach the {2} state.".format(self.guest_label, vmid, expected))
         return result, expected

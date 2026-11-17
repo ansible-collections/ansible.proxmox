@@ -46,7 +46,7 @@ def test_module_entrypoints(entrypoint, check_mode, status, expected, monkeypatc
     qemu.status.current.get.side_effect = [status, {"status": "running", "qmpstatus": "running"}]
     qemu.status.start.post.return_value = "UPID:pve01:start"
     qemu.status.resume.post.return_value = "UPID:pve01:resume"
-    client = SimpleNamespace(api=api)
+    client = SimpleNamespace(api=api, mark_changed=Mock())
     monkeypatch.setattr(proxmox_base, "ProxmoxClient", Mock(return_value=client))
     wait = Mock()
     monkeypatch.setattr(ProxmoxTask, "wait_for_task", wait)

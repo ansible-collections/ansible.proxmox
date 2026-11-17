@@ -11,6 +11,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from ansible_collections.ansible.proxmox.plugins.module_utils.proxmox import ProxmoxClient
 from ansible_collections.ansible.proxmox.plugins.module_utils.proxmox_power import ProxmoxPower
 from ansible_collections.ansible.proxmox.plugins.module_utils.proxmox_task import ProxmoxTask
 
@@ -29,7 +30,9 @@ def make_power(**params):
         fail_json=Mock(side_effect=RuntimeError("module failed")),
     )
     api = Mock()
-    return ProxmoxPower(module, client=SimpleNamespace(api=api)), api
+    client = ProxmoxClient(module)
+    client._api = api
+    return ProxmoxPower(module, client=client), api
 
 
 def test_lxc_power_waits_and_verifies_the_lxc_endpoint():
