@@ -82,12 +82,5 @@
         label: "{{ lxc_powerstate_case.action }}"
 
   always:
-    - name: Remove only the LXC container created by this target
-      ansible.proxmox.proxmox_lxc: # noqa: args[module]
-        node: "{{ proxmox_node }}"
-        vmid: "{{ lxc_powerstate_vmid }}"
-        power_cycle: 'off'
-        state: absent
-      when:
-        - lxc_powerstate_create is defined
-        - lxc_powerstate_create is changed
+    - name: Clean up after testing
+      ansible.builtin.include_tasks: cleanup.yml
