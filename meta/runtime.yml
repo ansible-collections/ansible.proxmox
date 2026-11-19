@@ -8,6 +8,8 @@ action_groups:
     - proxmox_lxc_info
     - proxmox_lxc_powerstate
     - proxmox_lxc_powerstate_info
+    - proxmox_lxc_snapshot
+    - proxmox_lxc_snapshot_info
     - proxmox_node_dns
     - proxmox_node_hosts
     - proxmox_node_info
