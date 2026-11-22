@@ -479,27 +479,30 @@ def test_template_info_status_recognizes_supported_values(status, expected):
     assert ProxmoxLxcTemplateInfoModule._is_template_status(status) is expected
 
 
-def test_template_info_lists_only_templates_using_current_status():
-    """Query each LXC current-status endpoint and return only template records."""
+def test_template_info_lists_templates_from_lxc_index_without_extra_status_calls():
+    """Filter template records from the LXC index without per-container reads."""
     handler = make_template_info_module()
-    handler.call_api.side_effect = [
-        [{"vmid": 100}, {"vmid": "101"}, {"vmid": None}, "invalid"],
-        {"template": 1, "status": "stopped"},
-        {"template": 0, "status": "stopped"},
+    containers = [
+        {"vmid": 100, "template": 1, "status": "stopped"},
+        {"vmid": "101", "template": "1", "status": "stopped"},
+        {"vmid": 102, "template": 0, "status": "stopped"},
+        {"vmid": 103, "status": "stopped"},
+        {"vmid": None, "template": 1},
+        {"name": "missing-vmid", "template": 1},
+        "invalid-resource",
+        None,
     ]
+    handler.call_api.return_value = containers
 
     result = handler.get_info()
 
-    assert result == [{"template": 1, "status": "stopped", "vmid": "100"}]
-    assert handler.call_api.call_count == 3
-    handler.call_api.assert_any_call(
-        "Retrieving LXC containers from node pve01",
-        handler.api.nodes("pve01").lxc.get,
-    )
-    handler.call_api.assert_any_call(
-        "Retrieving LXC container 100 status on node pve01",
-        handler.api.nodes("pve01").lxc(100).status.current.get,
-    )
+    assert result == [
+        {"vmid": 100, "template": 1, "status": "stopped"},
+        {"vmid": "101", "template": "1", "status": "stopped"},
+    ]
+    assert result[0] is not containers[0]
+    assert containers[0] == {"vmid": 100, "template": 1, "status": "stopped"}
+
     handler.client.validate_pve_permissions.assert_called_once_with(handler.api, "/vms")
     handler.validate_proxmox_resource_exist.assert_called_once_with(
         "node",
@@ -507,29 +510,40 @@ def test_template_info_lists_only_templates_using_current_status():
         handler.api.nodes.get,
         resource_key="node",
     )
+    handler.call_api.assert_called_once_with(
+        "Retrieving LXC containers from node pve01",
+        handler.api.nodes("pve01").lxc.get,
+    )
 
 
 def test_template_info_returns_only_requested_vmid_when_template():
-    """Restrict status lookups to the requested container when supplied."""
+    """Filter the LXC index by requested VMID while preserving its value type."""
     handler = make_template_info_module({"vmid": 101})
-    handler.call_api.side_effect = [[{"vmid": 100}, {"vmid": "101"}], {"template": "1", "status": "stopped"}]
+    handler.call_api.return_value = [
+        {"vmid": "101", "template": "1", "status": "stopped"},
+        {"vmid": 100, "template": 1, "status": "stopped"},
+    ]
 
     assert handler.get_info() == [{"template": "1", "status": "stopped", "vmid": "101"}]
-    assert handler.call_api.call_count == 2
+    handler.call_api.assert_called_once_with(
+        "Retrieving LXC containers from node pve01",
+        handler.api.nodes("pve01").lxc.get,
+    )
 
 
 def test_template_info_returns_empty_for_requested_non_template():
     """Return an empty list when a requested container is not a template."""
     handler = make_template_info_module({"vmid": 100})
-    handler.call_api.side_effect = [[{"vmid": 100}], {"template": 0, "status": "stopped"}]
+    handler.call_api.return_value = [{"vmid": 100, "template": 0, "status": "stopped"}]
 
     assert handler.get_info() == []
+    handler.call_api.assert_called_once()
 
 
 def test_template_info_returns_empty_when_requested_vmid_is_missing():
-    """Avoid status requests for a VMID absent from the node inventory."""
+    """Return no matches for a VMID absent from the node inventory."""
     handler = make_template_info_module({"vmid": 107})
-    handler.call_api.return_value = [{"vmid": 100}]
+    handler.call_api.return_value = [{"vmid": 100, "template": 1, "status": "stopped"}]
 
     assert handler.get_info() == []
     handler.call_api.assert_called_once()

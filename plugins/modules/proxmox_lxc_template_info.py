@@ -14,7 +14,7 @@ short_description: Retrieve LXC container templates
 description:
   - Retrieves template status information for LXC containers on a Proxmox VE node.
   - When I(vmid) is omitted, all LXC templates on the node are returned.
-  - When I(vmid) is provided, returns that container only if its current status marks it as a template.
+  - When I(vmid) is provided, returns that container only if the node inventory marks it as a template.
   - Returns an empty list when the requested container is missing or is not a template.
 version_added: "1.0.0"
 author:
@@ -66,12 +66,12 @@ EXAMPLES = r"""
 RETURN = r"""
 templates:
   description:
-    - Current status records for LXC templates on the requested node.
+    - Node inventory records for LXC templates on the requested node.
     - When C(vmid) is supplied, contains that container only if C(template=1) is reported.
   returned: always
   type: list
   elements: dict
-  sample: [{"vmid": "101", "status": "stopped", "template": 1}]
+  sample: [{"vmid": 101, "status": "stopped", "template": 1}]
 """
 
 from ansible.module_utils.basic import AnsibleModule
@@ -99,15 +99,8 @@ class ProxmoxLxcTemplateInfoModule(ProxmoxPower, ProxmoxInfoModule):
         """Return whether current LXC status marks the container as a template."""
         return isinstance(status, dict) and status.get("template") in (1, "1", True)
 
-    def _get_container_status(self, node, vmid):
-        """Retrieve current status for one LXC container."""
-        return self.call_api(
-            "Retrieving LXC container {0} status on node {1}".format(vmid, node),
-            self.api.nodes(node).lxc(vmid).status.current.get,
-        )
-
     def get_info(self):
-        """Return current status records for matching LXC templates."""
+        """Return node inventory records for matching LXC templates."""
         node = self.module.params["node"]
         vmid = self.module.params.get("vmid")
         if vmid is not None and not 100 <= vmid <= 999999999:
@@ -118,23 +111,19 @@ class ProxmoxLxcTemplateInfoModule(ProxmoxPower, ProxmoxInfoModule):
             "Retrieving LXC containers from node {0}".format(node),
             self.api.nodes(node).lxc.get,
         )
-        records = [
+        container_records = [
             container
             for container in containers or []
-            if isinstance(container, dict) and container.get("vmid") is not None
+            if isinstance(container, dict)
+            and container.get("vmid") is not None
+            and self._is_template_status(container)
         ]
         if vmid is not None:
-            records = [container for container in records if str(container["vmid"]) == str(vmid)]
+            container_records = [
+                container for container in container_records if str(container["vmid"]) == str(vmid)
+            ]
 
-        templates = []
-        for container in records:
-            container_vmid = container["vmid"]
-            status = self._get_container_status(node, container_vmid)
-            if self._is_template_status(status):
-                template = dict(status)
-                template["vmid"] = str(container_vmid)
-                templates.append(template)
-        return templates
+        return [dict(container) for container in container_records]
 
 
 def main():
