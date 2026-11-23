@@ -78,7 +78,9 @@ seealso:
 notes:
   - This module is not idempotent; a subsequent invocation fails if O(newid) is in use.
   - The LXC clone API does not support selecting a disk format. The destination storage default is used.
-  - The API identity must have permissions to clone the source container or template on C(/vms).
+  - The API identity must have the permissions required to clone the source container or template on C(/vms),
+    including C(VM.Clone), and to allocate the new container with C(VM.Allocate) on C(/vms/{newid}) or its pool.
+  - Cloning also requires C(Datastore.AllocateSpace) on each storage used by the clone and C(SDN.Use) on any bridge used by the container configuration.
 """
 
 EXAMPLES = r"""
