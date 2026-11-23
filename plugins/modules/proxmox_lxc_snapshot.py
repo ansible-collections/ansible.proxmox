@@ -32,7 +32,8 @@ options:
   snapname:
     description:
       - Snapshot name of 2-40 ASCII characters, starting with a letter and containing only letters, digits, underscores, or hyphens.
-      - The names V(current) and V(pending) are reserved by Proxmox.
+      - The names V(current) and V(vzdump) are reserved for LXC snapshots by Proxmox.
+      - The name V(pending) is also rejected because guest configurations use it for uncommitted changes.
     type: str
     required: true
   description:
@@ -48,6 +49,12 @@ options:
     type: str
     choices: [present, absent, rollback]
     default: present
+  start:
+    description:
+      - Whether to start the container after a successful rollback.
+      - This option is used only with C(state=rollback).
+    type: bool
+    default: false
 extends_documentation_fragment:
   - ansible.proxmox.proxmox_base
   - ansible.proxmox.proxmox_https_options
@@ -60,6 +67,7 @@ seealso:
   - module: ansible.proxmox.proxmox_lxc_snapshot_info
 notes:
   - Rollback is not idempotent; each invocation restores the snapshot and reports a change.
+  - Rolling back a running container stops it and leaves it stopped unless C(start=true) is requested.
   - The API identity must have the C(Administrator) role privileges propagated on C(/vms).
 """
 
@@ -85,6 +93,7 @@ EXAMPLES = r"""
     vmid: 100
     snapname: before_upgrade
     state: rollback
+    start: true
 """
 
 RETURN = r"""
@@ -136,6 +145,7 @@ class ProxmoxLxcSnapshotModule(ProxmoxResourceModule):
             task_upid = self.call_mutation(
                 "Rolling back LXC container {0} to snapshot {1}".format(self.module.params["vmid"], snapname),
                 self._snapshot_api(snapname).rollback.post,
+                start=int(self.module.params["start"]),
             )
             self._wait_for_snapshot_task(task_upid)
         self.exit(changed=True, resource=resource)
@@ -154,8 +164,10 @@ class ProxmoxLxcSnapshotModule(ProxmoxResourceModule):
                     "contain only letters, digits, underscores, or hyphens."
                 )
             )
-        if snapname == "current" or snapname.lower() == "pending":
-            self.module.fail_json(msg="snapname must not be 'current' or 'pending'.")
+        if snapname in ("current", "vzdump") or snapname.lower() == "pending":
+            self.module.fail_json(
+                msg="snapname must not be 'current', 'vzdump', or 'pending'."
+            )
         self.client.validate_pve_permissions(self.api, "/vms")
         self._snapshot_api = self.api.nodes(params["node"]).lxc(vmid).snapshot
         snapshots = self.call_api("Retrieving snapshot {0}".format(snapname), self._snapshot_api.get)
@@ -249,6 +261,7 @@ def main():
                 "vmid": {"type": "int", "required": True},
                 "snapname": {"type": "str", "required": True},
                 "state": {"type": "str", "choices": ["present", "absent", "rollback"], "default": "present"},
+                "start": {"type": "bool", "default": False},
                 "description": {"type": "str"},
             }
         ),

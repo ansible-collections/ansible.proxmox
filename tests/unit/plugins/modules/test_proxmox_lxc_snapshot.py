@@ -27,8 +27,9 @@ def snapshot_environment():
         params = {
             "node": "pve01",
             "vmid": 100,
-            "snapname": "before_upgrade",
+            "snapname": None if handler_class is ProxmoxLxcSnapshotInfoModule else "before_upgrade",
             "state": "present",
+            "start": False,
             "description": None,
             "task_timeout": None,
         }
@@ -161,9 +162,12 @@ def test_snapshot_absent_is_idempotent(snapshot_environment, monkeypatch, check_
 
 
 @pytest.mark.parametrize("check_mode", [False, True])
-def test_snapshot_rollback_is_non_idempotent(snapshot_environment, monkeypatch, check_mode):
+@pytest.mark.parametrize("start", [False, True])
+def test_snapshot_rollback_is_non_idempotent(snapshot_environment, monkeypatch, check_mode, start):
     snapshot = {"name": "before_upgrade"}
-    handler, endpoint = snapshot_environment(state="rollback", check_mode=check_mode, snapshots=[snapshot])
+    handler, endpoint = snapshot_environment(
+        state="rollback", check_mode=check_mode, start=start, snapshots=[snapshot],
+    )
     wait = Mock()
     monkeypatch.setattr(ProxmoxTask, "wait_for_task", wait)
 
@@ -181,6 +185,7 @@ def test_snapshot_rollback_is_non_idempotent(snapshot_environment, monkeypatch, 
         wait.assert_not_called()
     else:
         assert endpoint.return_value.rollback.post.call_count == 2
+        endpoint.return_value.rollback.post.assert_called_with(start=int(start))
         assert wait.call_count == 2
 
 
@@ -192,6 +197,15 @@ def test_snapshot_rollback_rejects_missing_snapshot(snapshot_environment):
 
     handler.module.fail_json.assert_called_once_with(msg="Snapshot before_upgrade does not exist on LXC container 100.")
     endpoint.return_value.rollback.post.assert_not_called()
+
+
+def test_snapshot_documentation_warns_running_rollback_leaves_container_stopped():
+    documentation = yaml.safe_load(proxmox_lxc_snapshot.DOCUMENTATION)
+
+    assert (
+        "Rolling back a running container stops it and leaves it stopped unless C(start=true) is requested."
+        in documentation["notes"]
+    )
 
 
 @pytest.mark.parametrize("vmid", [99, 1000000000])
@@ -215,14 +229,14 @@ def test_snapshot_rejects_invalid_names(snapshot_environment, snapname):
     endpoint.get.assert_not_called()
 
 
-@pytest.mark.parametrize("snapname", ["current", "pending", "PENDING"])
+@pytest.mark.parametrize("snapname", ["current", "vzdump", "pending", "PENDING"])
 def test_snapshot_rejects_reserved_names(snapshot_environment, snapname):
     handler, endpoint = snapshot_environment(snapname=snapname)
 
     with pytest.raises(RuntimeError, match="module failed"):
         handler.get_resource()
 
-    handler.module.fail_json.assert_called_once_with(msg="snapname must not be 'current' or 'pending'.")
+    handler.module.fail_json.assert_called_once_with(msg="snapname must not be 'current', 'vzdump', or 'pending'.")
     endpoint.get.assert_not_called()
 
 
@@ -247,8 +261,71 @@ def test_snapshot_info_returns_all_records(snapshot_environment):
     endpoint.get.assert_called_once_with()
 
 
-def test_snapshot_info_returns_empty_for_missing_container(snapshot_environment):
-    handler, endpoint = snapshot_environment(handler_class=ProxmoxLxcSnapshotInfoModule)
+@pytest.mark.parametrize("check_mode", [False, True])
+def test_snapshot_info_fetches_selected_configuration(snapshot_environment, check_mode):
+    configuration = {"description": "Saved snapshot", "hostname": "test-container", "memory": 512}
+    handler, endpoint = snapshot_environment(
+        handler_class=ProxmoxLxcSnapshotInfoModule,
+        check_mode=check_mode,
+        snapname="before_upgrade",
+        snapshots=[{"name": "before_upgrade"}, {"name": "current"}],
+    )
+    endpoint.return_value.config.get.return_value = configuration
+
+    with pytest.raises(SystemExit):
+        handler.execute_info_module()
+
+    handler.module.exit_json.assert_called_once_with(
+        changed=False,
+        snapshots=[dict(configuration, name="before_upgrade")],
+    )
+    assert configuration == {"description": "Saved snapshot", "hostname": "test-container", "memory": 512}
+    handler.api.nodes.get.assert_called_once_with()
+    handler.api.nodes.return_value.lxc.get.assert_called_once_with()
+    endpoint.get.assert_called_once_with()
+    endpoint.assert_called_once_with("before_upgrade")
+    endpoint.return_value.config.get.assert_called_once_with()
+
+
+@pytest.mark.parametrize("configuration", [None, {}])
+def test_snapshot_info_handles_optional_selected_configuration(snapshot_environment, configuration):
+    handler, endpoint = snapshot_environment(
+        handler_class=ProxmoxLxcSnapshotInfoModule,
+        snapname="before_upgrade",
+        snapshots=[{"name": "before_upgrade"}],
+    )
+    endpoint.return_value.config.get.return_value = configuration
+
+    assert handler.get_info() == ([] if configuration is None else [{"name": "before_upgrade"}])
+
+
+@pytest.mark.parametrize("check_mode", [False, True])
+def test_snapshot_info_returns_empty_for_missing_snapshot(snapshot_environment, check_mode):
+    handler, endpoint = snapshot_environment(
+        handler_class=ProxmoxLxcSnapshotInfoModule,
+        check_mode=check_mode,
+        snapname="missing_snapshot",
+        snapshots=[{"name": "current"}],
+    )
+
+    with pytest.raises(SystemExit):
+        handler.execute_info_module()
+
+    handler.module.exit_json.assert_called_once_with(changed=False, snapshots=[])
+    handler.module.fail_json.assert_not_called()
+    handler.api.nodes.get.assert_called_once_with()
+    handler.api.nodes.return_value.lxc.get.assert_called_once_with()
+    endpoint.get.assert_called_once_with()
+    endpoint.assert_not_called()
+    endpoint.return_value.config.get.assert_not_called()
+
+
+@pytest.mark.parametrize("snapname", [None, "before_upgrade"])
+def test_snapshot_info_returns_empty_for_missing_container(snapshot_environment, snapname):
+    handler, endpoint = snapshot_environment(
+        handler_class=ProxmoxLxcSnapshotInfoModule,
+        snapname=snapname,
+    )
     handler.api.nodes.return_value.lxc.get.return_value = []
 
     assert handler.get_info() == []
@@ -280,9 +357,10 @@ def test_snapshot_main_registers_arguments_and_runtime_group(monkeypatch, module
     if module_source is proxmox_lxc_snapshot:
         assert spec["snapname"] == {"type": "str", "required": True}
         assert spec["description"] == {"type": "str"}
+        assert spec["start"] == {"type": "bool", "default": False}
         assert spec["state"] == {"type": "str", "choices": ["present", "absent", "rollback"], "default": "present"}
     else:
-        assert "snapname" not in spec
+        assert spec["snapname"] == {"type": "str"}
     handler_constructor.assert_called_once_with(module)
     getattr(handler, entrypoint).assert_called_once_with()
 

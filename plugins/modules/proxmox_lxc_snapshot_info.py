@@ -12,8 +12,11 @@ DOCUMENTATION = r"""
 module: proxmox_lxc_snapshot_info
 short_description: Retrieve LXC container snapshots
 description:
-  - Returns all snapshot records for an LXC container, including the special V(current) entry.
-  - Returns an empty list when the container does not exist.
+  - Returns all snapshot records for an LXC container when O(snapname) is omitted.
+  - The complete snapshot list includes the special V(current) entry representing the current
+    container configuration.
+  - When O(snapname) is provided, retrieves only that snapshot's full configuration.
+  - Returns an empty list when the container or requested snapshot does not exist.
 version_added: "1.0.0"
 author:
   - Steve Fulmer (@stevefulme1)
@@ -29,6 +32,12 @@ options:
       - Valid values range from 100 to 999999999.
     type: int
     required: true
+  snapname:
+    description:
+      - Retrieve the configuration of this snapshot.
+      - When omitted, retrieves all snapshot summaries, including the V(current) entry.
+      - Returns an empty list when the container or requested snapshot does not exist.
+    type: str
 extends_documentation_fragment:
   - ansible.proxmox.proxmox_base
   - ansible.proxmox.proxmox_https_options
@@ -47,11 +56,24 @@ EXAMPLES = r"""
     node: pve01
     vmid: 100
   register: lxc_snapshots
+
+- name: Retrieve one LXC snapshot configuration
+  ansible.proxmox.proxmox_lxc_snapshot_info:
+    api_host: proxmox.example.com
+    api_user: root@pam
+    api_password: "{{ vault_proxmox_password }}"
+    node: pve01
+    vmid: 100
+    snapname: before_upgrade
+  register: lxc_snapshot
 """
 
 RETURN = r"""
 snapshots:
-  description: Snapshot records returned by Proxmox, including the current configuration entry.
+  description:
+    - All snapshot summaries, including the current container entry, when O(snapname) is omitted.
+    - A single snapshot's full configuration, with its name, when O(snapname) is provided.
+    - An empty list when the container or requested snapshot does not exist.
   returned: always
   type: list
   elements: dict
@@ -85,12 +107,12 @@ from ansible_collections.ansible.proxmox.plugins.module_utils.proxmox_info impor
 
 
 class ProxmoxLxcSnapshotInfoModule(ProxmoxInfoModule):
-    """Retrieve all snapshots through the shared read-only lifecycle."""
+    """Retrieve all LXC snapshot summaries or one selected configuration."""
 
     result_key = "snapshots"
 
     def get_info(self):
-        """Return all LXC snapshot metadata, or an empty list for a missing container."""
+        """Return snapshot summaries or the selected configuration for an LXC container."""
         params = self.module.params
         vmid = params["vmid"]
         if not 100 <= vmid <= 999999999:
@@ -106,20 +128,36 @@ class ProxmoxLxcSnapshotInfoModule(ProxmoxInfoModule):
             "LXC container", vmid, lambda: containers, resource_key="vmid", fail_on_missing=False
         ):
             return []
-        snapshots = self.call_api(
+        snapshot_api = self.api.nodes(node).lxc(vmid).snapshot
+        snapname = params.get("snapname")
+        if snapname is not None:
+            if not self.validate_proxmox_resource_exist(
+                "snapshot",
+                snapname,
+                snapshot_api.get,
+                resource_key="name",
+                fail_on_missing=False,
+            ):
+                return []
+            snapshot = self.call_api(
+                "Retrieving snapshot {0} of LXC container {1} on node {2}".format(snapname, vmid, node),
+                snapshot_api(snapname).config.get,
+            )
+            return [dict(snapshot, name=snapname)] if isinstance(snapshot, dict) else []
+        return self.call_api(
             "Retrieving snapshots of LXC container {0} on node {1}".format(vmid, node),
-            self.api.nodes(node).lxc(vmid).snapshot.get,
-        )
-        return snapshots or []
+            snapshot_api.get,
+        ) or []
 
 
 def main():
-    """Parse arguments and return all LXC snapshot information."""
+    """Parse arguments and return the requested LXC snapshot information."""
     module = AnsibleModule(
         argument_spec=proxmox_argument_spec(
             {
                 "node": {"type": "str", "required": True},
                 "vmid": {"type": "int", "required": True},
+                "snapname": {"type": "str"},
             }
         ),
         supports_check_mode=True,

@@ -109,6 +109,20 @@
         vmid: "{{ lxc_snapshot_vmid }}"
       register: lxc_snapshot_list
 
+    - name: Read the created LXC snapshot configuration
+      ansible.proxmox.proxmox_lxc_snapshot_info:
+        node: "{{ proxmox_node }}"
+        vmid: "{{ lxc_snapshot_vmid }}"
+        snapname: "{{ lxc_snapshot_name }}"
+      register: lxc_snapshot_configuration
+
+    - name: Read a missing LXC snapshot configuration
+      ansible.proxmox.proxmox_lxc_snapshot_info:
+        node: "{{ proxmox_node }}"
+        vmid: "{{ lxc_snapshot_vmid }}"
+        snapname: "{{ lxc_snapshot_name }}-missing"
+      register: lxc_snapshot_missing_configuration
+
     - name: Assert creation result and observed snapshots
       ansible.builtin.assert:
         that:
@@ -118,6 +132,12 @@
           - lxc_snapshot_list is not changed
           - "'current' in (lxc_snapshot_list.snapshots | map(attribute='name') | list)"
           - lxc_snapshot_name in (lxc_snapshot_list.snapshots | map(attribute='name') | list)
+          - lxc_snapshot_configuration.snapshots | length == 1
+          - lxc_snapshot_configuration.snapshots[0].name == lxc_snapshot_name
+          - lxc_snapshot_missing_configuration.snapshots | length == 0
+          - >-
+            lxc_snapshot_configuration.snapshots[0].description | trim
+            == 'Snapshot created by Ansible integration tests.'
           - >-
             lxc_snapshot_list.snapshots
             | selectattr('name', 'equalto', lxc_snapshot_name)
@@ -259,13 +279,40 @@
             | map(attribute='description')
             | first | trim == 'Snapshot description updated by Ansible integration tests.'
 
-    - name: Roll back the LXC container
+    - name: Start the LXC container before rollback
+      ansible.proxmox.proxmox_lxc_powerstate:
+        vmid: "{{ lxc_snapshot_vmid }}"
+        powerstate: start
+      register: lxc_snapshot_start_before_rollback
+
+    - name: Verify the LXC container is running before rollback
+      ansible.proxmox.proxmox_lxc_powerstate_info:
+        vmid: "{{ lxc_snapshot_vmid }}"
+      register: lxc_snapshot_running_before_rollback
+
+    - name: Assert the LXC container started before rollback
+      ansible.builtin.assert:
+        that:
+          - lxc_snapshot_start_before_rollback.powerstate == 'running'
+          - lxc_snapshot_running_before_rollback.powerstate == 'running'
+
+    - name: Roll back the running LXC container
       ansible.proxmox.proxmox_lxc_snapshot:
         node: "{{ proxmox_node }}"
         vmid: "{{ lxc_snapshot_vmid }}"
         snapname: "{{ lxc_snapshot_name }}"
         state: rollback
       register: lxc_snapshot_rollback
+
+    - name: Read the LXC power state after rollback
+      ansible.proxmox.proxmox_lxc_powerstate_info:
+        vmid: "{{ lxc_snapshot_vmid }}"
+      register: lxc_snapshot_powerstate_after_rollback
+
+    - name: Assert rollback leaves the running container stopped
+      ansible.builtin.assert:
+        that:
+          - lxc_snapshot_powerstate_after_rollback.powerstate == 'stopped'
 
     - name: Read snapshots after rollback
       ansible.proxmox.proxmox_lxc_snapshot_info:
@@ -293,7 +340,13 @@
         vmid: "{{ lxc_snapshot_vmid }}"
         snapname: "{{ lxc_snapshot_name }}"
         state: rollback
+        start: true
       register: lxc_snapshot_rollback_again
+
+    - name: Verify the LXC container started after rollback
+      ansible.proxmox.proxmox_lxc_powerstate_info:
+        vmid: "{{ lxc_snapshot_vmid }}"
+      register: lxc_snapshot_powerstate_after_rollback_again
 
     - name: Read snapshots after repeated rollback
       ansible.proxmox.proxmox_lxc_snapshot_info:
@@ -307,6 +360,7 @@
           - lxc_snapshot_rollback_again is changed
           - lxc_snapshot_rollback_again.snapshot.name == lxc_snapshot_name
           - lxc_snapshot_rollback_again.task_upid is defined
+          - lxc_snapshot_powerstate_after_rollback_again.powerstate == 'running'
           - lxc_snapshot_after_rollback_again is not changed
           - lxc_snapshot_name in (lxc_snapshot_after_rollback_again.snapshots | map(attribute='name') | list)
           - >-
