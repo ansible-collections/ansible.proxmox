@@ -14,6 +14,8 @@ short_description: Migrate an LXC container to another node
 description:
   - Reads migration preconditions before submitting an LXC migration.
   - Returns preconditions in both normal and check mode.
+  - A running container requires O(restart=true).
+  - Proxmox VE does not implement live migration for LXC containers.
 version_added: "1.0.0"
 author:
   - Steve Fulmer (@stevefulme1)
@@ -38,9 +40,6 @@ options:
       - Override the configured migration I/O bandwidth limit in KiB/s.
       - Must be zero or greater.
     type: float
-  online:
-    description: Use online/live migration.
-    type: bool
   restart:
     description: Use restart migration.
     type: bool
@@ -78,7 +77,7 @@ EXAMPLES = r"""
     node: pve01
     vmid: 100
     target: pve02
-    online: true
+    restart: true
     target_storage: local-lvm
     task_timeout: 1800
 """
@@ -103,6 +102,11 @@ preconditions:
   description: Migration preconditions returned by the Proxmox API.
   returned: success
   type: dict
+  contains:
+    running:
+      description: Whether the container is running on the source node.
+      returned: always
+      type: bool
 task_upid:
   description: UPID of the completed migration task.
   returned: when a migration task is submitted
@@ -126,7 +130,6 @@ class ProxmoxLxcMigrateModule(ProxmoxActionModule):
     result_key = "migration"
     API_OPTIONS = {
         "bwlimit": "bwlimit",
-        "online": "online",
         "restart": "restart",
         "target_storage": "target-storage",
         "timeout": "timeout",
@@ -157,6 +160,7 @@ class ProxmoxLxcMigrateModule(ProxmoxActionModule):
 
     def _validate_preconditions(self):
         """Fail closed when Proxmox cannot verify the requested migration."""
+        params = self.module.params
         preconditions = self._preconditions
         if not isinstance(preconditions, dict):
             self.module.fail_json(msg="Unable to determine LXC migration preconditions.")
@@ -164,6 +168,8 @@ class ProxmoxLxcMigrateModule(ProxmoxActionModule):
         running = preconditions.get("running")
         if running not in (True, False, 0, 1, "0", "1"):
             self.module.fail_json(msg="Unable to determine whether the LXC container is running.")
+        if running in (True, 1, "1") and not params.get("restart"):
+            self.module.fail_json(msg="LXC container is running; set restart=true to migrate it.")
 
         allowed_nodes = preconditions.get("allowed_nodes", preconditions.get("allowed-nodes"))
         if allowed_nodes is not None and not isinstance(allowed_nodes, list):
@@ -175,7 +181,7 @@ class ProxmoxLxcMigrateModule(ProxmoxActionModule):
         if not isinstance(not_allowed_nodes, dict):
             self.module.fail_json(msg="Unable to determine nodes disallowed for LXC migration.")
 
-        target = self.module.params["target"]
+        target = params["target"]
         target_blockers = not_allowed_nodes.get(target)
         if target in not_allowed_nodes or (allowed_nodes is not None and target not in allowed_nodes):
             self.module.fail_json(
@@ -228,7 +234,6 @@ def main():
             "vmid": {"type": "int", "required": True},
             "target": {"type": "str", "required": True},
             "bwlimit": {"type": "float"},
-            "online": {"type": "bool"},
             "restart": {"type": "bool"},
             "target_storage": {"type": "str"},
             "timeout": {"type": "int", "default": 180},

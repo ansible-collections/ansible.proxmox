@@ -108,11 +108,93 @@
         that:
           - lxc_migrate_after_check_mode.lxcs | length == 1
 
-    - name: Migrate the LXC container to the target node
+    - name: Start the LXC migration fixture
+      ansible.proxmox.proxmox_lxc_powerstate:
+        vmid: "{{ lxc_migrate_vmid }}"
+        powerstate: start
+      register: lxc_migrate_start
+
+    - name: Verify the LXC migration fixture is running
+      ansible.proxmox.proxmox_lxc_powerstate_info:
+        vmid: "{{ lxc_migrate_vmid }}"
+      register: lxc_migrate_running_before
+
+    - name: Assert the migration fixture is running
+      ansible.builtin.assert:
+        that:
+          - lxc_migrate_start.powerstate == 'running'
+          - lxc_migrate_running_before.powerstate == 'running'
+
+    - name: Reject running migration without restart in check mode
       ansible.proxmox.proxmox_lxc_migrate:
         node: "{{ lxc_migrate_source_node }}"
         vmid: "{{ lxc_migrate_vmid }}"
         target: "{{ lxc_migrate_target_node }}"
+        target_storage: local-lvm
+      check_mode: true
+      register: lxc_migrate_running_check_rejected
+      ignore_errors: true
+
+    - name: Assert check mode rejects an unspecified running migration mode
+      ansible.builtin.assert:
+        that:
+          - lxc_migrate_running_check_rejected is failed
+          - >-
+            'restart=true'
+            in lxc_migrate_running_check_rejected.msg
+
+    - name: Reject running migration without restart
+      ansible.proxmox.proxmox_lxc_migrate:
+        node: "{{ lxc_migrate_source_node }}"
+        vmid: "{{ lxc_migrate_vmid }}"
+        target: "{{ lxc_migrate_target_node }}"
+        target_storage: local-lvm
+      register: lxc_migrate_running_rejected
+      ignore_errors: true
+
+    - name: Assert normal mode rejects an unspecified running migration mode
+      ansible.builtin.assert:
+        that:
+          - lxc_migrate_running_rejected is failed
+          - >-
+            'restart=true'
+            in lxc_migrate_running_rejected.msg
+
+    - name: Predict restart migration in check mode
+      ansible.proxmox.proxmox_lxc_migrate:
+        node: "{{ lxc_migrate_source_node }}"
+        vmid: "{{ lxc_migrate_vmid }}"
+        target: "{{ lxc_migrate_target_node }}"
+        restart: true
+        target_storage: local-lvm
+        task_timeout: 1800
+      check_mode: true
+      register: lxc_migrate_restart_check
+
+    - name: Assert check-mode restart preconditions
+      ansible.builtin.assert:
+        that:
+          - lxc_migrate_restart_check is changed
+          - lxc_migrate_restart_check.preconditions.running | bool
+          - lxc_migrate_restart_check.task_upid is not defined
+
+    - name: Verify restart check mode kept the container on the source node
+      ansible.proxmox.proxmox_lxc_info:
+        node: "{{ lxc_migrate_source_node }}"
+        vmid: "{{ lxc_migrate_vmid }}"
+      register: lxc_migrate_restart_after_check
+
+    - name: Assert restart check mode did not migrate the container
+      ansible.builtin.assert:
+        that:
+          - lxc_migrate_restart_after_check.lxcs | length == 1
+
+    - name: Migrate the running LXC container with restart
+      ansible.proxmox.proxmox_lxc_migrate:
+        node: "{{ lxc_migrate_source_node }}"
+        vmid: "{{ lxc_migrate_vmid }}"
+        target: "{{ lxc_migrate_target_node }}"
+        restart: true
         target_storage: local-lvm
         task_timeout: 1800
       register: lxc_migrate_result
@@ -121,7 +203,7 @@
       ansible.builtin.assert:
         that:
           - lxc_migrate_result is changed
-          - lxc_migrate_result.preconditions.running is defined
+          - lxc_migrate_result.preconditions.running | bool
           - lxc_migrate_result.task_upid is defined
 
     - name: Verify the container is present on the target node
@@ -136,6 +218,11 @@
         vmid: "{{ lxc_migrate_vmid }}"
       register: lxc_migrate_source_after
 
+    - name: Verify the migrated LXC container is running
+      ansible.proxmox.proxmox_lxc_powerstate_info:
+        vmid: "{{ lxc_migrate_vmid }}"
+      register: lxc_migrate_powerstate_after
+
     - name: Assert the migrated container is only on the target node
       ansible.builtin.assert:
         that:
@@ -144,6 +231,7 @@
             lxc_migrate_target_after.lxcs[0].hostname
             == 'ansible-lxc-migrate-' ~ lxc_migrate_vmid
           - lxc_migrate_source_after.lxcs | length == 0
+          - lxc_migrate_powerstate_after.powerstate == 'running'
 
   always:
     - name: Remove the LXC migration fixture from the target node
@@ -152,10 +240,9 @@
         vmid: "{{ lxc_migrate_vmid }}"
         state: absent
         power_cycle: 'off'
+      failed_when: false
       when:
         - lxc_migrate_cleanup_allowed | default(false)
-        - lxc_migrate_create is defined
-        - lxc_migrate_create is changed
 
     - name: Remove the LXC migration fixture from the source node
       ansible.proxmox.proxmox_lxc:
@@ -163,7 +250,27 @@
         vmid: "{{ lxc_migrate_vmid }}"
         state: absent
         power_cycle: 'off'
+      failed_when: false
       when:
         - lxc_migrate_cleanup_allowed | default(false)
-        - lxc_migrate_create is defined
-        - lxc_migrate_create is changed
+
+    - name: Verify the migration fixture is absent from the target node
+      ansible.proxmox.proxmox_lxc_info:
+        node: "{{ lxc_migrate_target_node }}"
+        vmid: "{{ lxc_migrate_vmid }}"
+      register: lxc_migrate_target_cleanup_info
+      when: lxc_migrate_cleanup_allowed | default(false)
+
+    - name: Verify the migration fixture is absent from the source node
+      ansible.proxmox.proxmox_lxc_info:
+        node: "{{ lxc_migrate_source_node }}"
+        vmid: "{{ lxc_migrate_vmid }}"
+      register: lxc_migrate_source_cleanup_info
+      when: lxc_migrate_cleanup_allowed | default(false)
+
+    - name: Assert cleanup removed the migration fixture from both nodes
+      ansible.builtin.assert:
+        that:
+          - lxc_migrate_target_cleanup_info.lxcs | length == 0
+          - lxc_migrate_source_cleanup_info.lxcs | length == 0
+      when: lxc_migrate_cleanup_allowed | default(false)

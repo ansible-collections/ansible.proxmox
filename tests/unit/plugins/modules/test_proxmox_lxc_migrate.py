@@ -24,7 +24,6 @@ def make_migrate_module(params=None, check_mode=False, preconditions=None):
         "vmid": 100,
         "target": "pve02",
         "bwlimit": None,
-        "online": None,
         "restart": None,
         "target_storage": None,
         "timeout": 180,
@@ -85,8 +84,7 @@ def test_migrate_posts_options_and_waits(monkeypatch):
     handler, endpoint = make_migrate_module(
         params={
             "bwlimit": 1024.5,
-            "online": True,
-            "restart": False,
+            "restart": True,
             "target_storage": "local-lvm",
             "timeout": 90,
         },
@@ -101,8 +99,7 @@ def test_migrate_posts_options_and_waits(monkeypatch):
     endpoint.post.assert_called_once_with(
         target="pve02",
         bwlimit=1024.5,
-        online=1,
-        restart=0,
+        restart=1,
         **{"target-storage": "local-lvm", "timeout": 90},
     )
     wait.assert_called_once_with("UPID:pve01:lxc-migrate", include_log_on_failure=True)
@@ -110,6 +107,25 @@ def test_migrate_posts_options_and_waits(monkeypatch):
     assert result["changed"] is True
     assert result["task_upid"] == "UPID:pve01:lxc-migrate"
     assert result["preconditions"] == endpoint.get.return_value
+
+
+@pytest.mark.parametrize("check_mode", [False, True])
+@pytest.mark.parametrize("running", [True, 1, "1"])
+def test_migrate_rejects_running_container_without_restart(check_mode, running):
+    handler, endpoint = make_migrate_module(
+        check_mode=check_mode,
+        preconditions={"running": running, "allowed_nodes": ["pve02"]},
+    )
+
+    with pytest.raises(RuntimeError, match="module failed"):
+        handler.execute_action_module()
+
+    handler.module.fail_json.assert_called_once_with(
+        msg="LXC container is running; set restart=true to migrate it."
+    )
+    handler.module.exit_json.assert_not_called()
+    endpoint.get.assert_called_once_with(target="pve02")
+    endpoint.post.assert_not_called()
 
 
 @pytest.mark.parametrize("field_name", ["allowed_nodes", "allowed-nodes"])
@@ -231,6 +247,8 @@ def test_migrate_main_registers_arguments(monkeypatch):
     assert spec["vmid"] == {"type": "int", "required": True}
     assert spec["target"] == {"type": "str", "required": True}
     assert spec["bwlimit"] == {"type": "float"}
+    assert "online" not in spec
+    assert spec["restart"] == {"type": "bool"}
     assert spec["target_storage"] == {"type": "str"}
     assert spec["timeout"] == {"type": "int", "default": 180}
     assert arguments["supports_check_mode"] is True
