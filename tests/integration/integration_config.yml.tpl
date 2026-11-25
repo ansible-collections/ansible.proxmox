@@ -7,3 +7,4 @@ proxmox_api_token_id: ${PROXMOX_TOKEN_ID}
 proxmox_api_token_secret: ${PROXMOX_TOKEN_SECRET}
 proxmox_ca_path: ${PROXMOX_CA_PATH}
 proxmox_validate_certs: ${PROXMOX_VALIDATE_CERTS}
+realm_test_ldap_advertise_host: ${PROXMOX_LDAP_ADVERTISE_HOST}

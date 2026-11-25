@@ -99,6 +99,7 @@ jobs:
           PROXMOX_USER: ${{ secrets.PROXMOX_USER }}
           PROXMOX_VALIDATE_CERTS: ${{ secrets.PROXMOX_VALIDATE_CERTS }}
           PROXMOX_CA_PATH: ${{ secrets.PROXMOX_CA_PATH }}
+          PROXMOX_LDAP_ADVERTISE_HOST: ${{ secrets.PROXMOX_LDAP_ADVERTISE_HOST }}
 
       - name: List integration targets
         env:

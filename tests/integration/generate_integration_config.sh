@@ -25,6 +25,7 @@ export PROXMOX_PASSWORD="${PROXMOX_PASSWORD:-}"
 export PROXMOX_TOKEN_ID="${PROXMOX_TOKEN_ID:-}"
 export PROXMOX_TOKEN_SECRET="${PROXMOX_TOKEN_SECRET:-}"
 export PROXMOX_VALIDATE_CERTS="${PROXMOX_VALIDATE_CERTS:-true}"
+export PROXMOX_LDAP_ADVERTISE_HOST="${PROXMOX_LDAP_ADVERTISE_HOST:-}"
 
 python3 - "${TEMPLATE}" "${OUTPUT}" <<'PY'
 import json
@@ -40,6 +41,7 @@ variables = (
     "PROXMOX_PASSWORD",
     "PROXMOX_TOKEN_ID",
     "PROXMOX_TOKEN_SECRET",
+    "PROXMOX_LDAP_ADVERTISE_HOST",
 )
 
 template = Path(sys.argv[1]).read_text(encoding="utf-8")
