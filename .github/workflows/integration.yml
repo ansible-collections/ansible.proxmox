@@ -38,7 +38,7 @@ jobs:
         run: echo "Integration approved"
 
   integration:
-    name: "Integration (${{ matrix.ansible_version }})"
+    name: "Integration (${{ matrix.ansible_version }} / Python ${{ matrix.python_version }})"
     runs-on: [self-hosted, proxmox]
     needs:
       - approve
@@ -53,11 +53,17 @@ jobs:
       fail-fast: false
       max-parallel: 1
       matrix:
-        ansible_version:
-          - stable-2.16
-          - stable-2.18
-          - stable-2.20
-          - stable-2.21
+        include:
+          - ansible_version: stable-2.16
+            python_version: "3.12"
+          - ansible_version: stable-2.18
+            python_version: "3.12"
+          - ansible_version: stable-2.20
+            python_version: "3.12"
+          - ansible_version: stable-2.21
+            python_version: "3.12"
+          - ansible_version: stable-2.22
+            python_version: "3.13"
     defaults:
       run:
         shell: bash
@@ -79,7 +85,7 @@ jobs:
           set -euo pipefail
           integration_venv="$(mktemp -d "${RUNNER_TEMP}/proxmox-venv.XXXXXX")"
           printf 'INTEGRATION_VENV=%s\n' "${integration_venv}" >> "${GITHUB_ENV}"
-          python3.12 -m venv "${integration_venv}"
+          python${{ matrix.python_version }} -m venv "${integration_venv}"
           source "${integration_venv}/bin/activate"
           python -m pip install "git+https://github.com/ansible/ansible.git@${ANSIBLE_VERSION}"
 
