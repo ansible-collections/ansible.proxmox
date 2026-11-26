@@ -1,0 +1,33 @@
+---
+# Copy to .github/workflows/changelog.yml in the collection repository and pin
+# the reusable workflow to a release commit SHA.
+#
+# Pull requests that change existing plugins, modules, roles, playbooks or
+# meta/runtime.yml must add a fragment to changelogs/fragments/. To bypass the
+# check (for example for CI-only or test-only changes), add the skip-changelog
+# label to the pull request. The label must exist in the repository.
+name: Changelog
+
+on:
+  pull_request:
+    # labeled/unlabeled re-run the check when the skip-changelog label changes.
+    types:
+      - opened
+      - reopened
+      - labeled
+      - unlabeled
+      - synchronize
+    branches:
+      - main
+      - stable-*
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  changelog:
+    uses: eco-ansible-content/collections-standards/.github/workflows/changelog.yml@5180c4fa6396ddaedd7b5c3a5add16472557816a # v0.0.1
