@@ -1,151 +1,24 @@
 ---
-# Reusable workflow: run ansible-test units against a matrix of ansible-core and
-# Python versions, and publish a coverage report for SonarCloud.
+# Copy to .github/workflows/units.yml in the collection repository and pin
+# the reusable workflow to a release commit SHA.
 #
-# The collection is installed with "ansible-galaxy collection install .", which
-# also installs the dependencies declared in galaxy.yml, and the tests run from
-# the installed copy. Paths excluded by build_ignore in galaxy.yml are therefore
-# not available to the tests. Python requirements (tests/unit/requirements.txt)
-# are installed by ansible-test in the container.
-#
-# Artifacts:
-#   units-coverage
-#       coverage-units.xml from the matrix entry with publish_coverage: true.
-#   pr-metadata
-#       pr-metadata.json with the pull request number and head SHA (pull_request
-#       events only). The sonarcloud.yml workflow uses it to decorate the PR and
-#       verifies it against the GitHub API, because it is produced by untrusted code.
-#
-# The caller workflow MUST be named "Units" if sonarcloud.yml is triggered from it
-# with workflow_run (or the workflow_run.workflows list must match the caller name).
+# Keep the workflow name "Units": the SonarCloud workflow is triggered by name.
 name: Units
 
 on:
+  push:
+    branches:
+      - main
+      - stable-*
   pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
   units:
-    name: Units (Ⓐ${{ matrix.versions.ansible }} - ${{ matrix.versions.python }})
-    runs-on: ubuntu-latest
-    continue-on-error: ${{ matrix.versions.ansible == 'devel' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        versions:
-          # Testing all ansible-core and controller Python versions is impractical. Only test the
-          # newest and oldest controller Python versions supported by each ansible-core we support.
-          # https://endoflife.date/ansible-core (Control node Python column)
-          # Exactly one entry has publish_coverage: true, usually the latest stable release.
-          - { python: "3.15", ansible: devel }
-          - { python: "3.15", ansible: stable-2.22, publish_coverage: true }
-          - { python: "3.13", ansible: stable-2.22 }
-          - { python: "3.14", ansible: stable-2.21 }
-          - { python: "3.12", ansible: stable-2.21 }
-          - { python: "3.14", ansible: stable-2.20 }
-          - { python: "3.12", ansible: stable-2.20 }
-          - { python: "3.13", ansible: stable-2.19 }
-          - { python: "3.11", ansible: stable-2.19 }
-          - { python: "3.13", ansible: stable-2.18 }
-          - { python: "3.11", ansible: stable-2.18 }
-          - { python: "3.12", ansible: stable-2.16 }
-          - { python: "3.10", ansible: stable-2.16 }
-    env:
-      PY_COLORS: "1"
-    steps:
-      - name: Checkout the collection repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Set up Python ${{ matrix.versions.python }}
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: ${{ matrix.versions.python }}
-
-      - name: Install ansible-core (${{ matrix.versions.ansible }})
-        env:
-          ANSIBLE_REF: ${{ matrix.versions.ansible }}
-        run: >-
-          python -m pip install --disable-pip-version-check
-          "https://github.com/ansible/ansible/archive/${ANSIBLE_REF}.tar.gz"
-
-      # Installs to ~/.ansible/collections/ansible_collections/<namespace>/<name>,
-      # the layout ansible-test requires, together with the galaxy.yml dependencies.
-      - name: Install the collection and its dependencies
-        id: collection
-        run: |
-          set -euo pipefail
-          ansible-galaxy collection install . --force
-          namespace="$(python -c 'import yaml; print(yaml.safe_load(open("galaxy.yml"))["namespace"])')"
-          name="$(python -c 'import yaml; print(yaml.safe_load(open("galaxy.yml"))["name"])')"
-          echo "path=${HOME}/.ansible/collections/ansible_collections/${namespace}/${name}" >> "$GITHUB_OUTPUT"
-
-      - name: Run unit tests
-        working-directory: ${{ steps.collection.outputs.path }}
-        env:
-          PYTHON_VERSION: ${{ matrix.versions.python }}
-        run: ansible-test units --docker --python "${PYTHON_VERSION}" --coverage --color -v
-
-      - name: Export coverage data
-        working-directory: ${{ steps.collection.outputs.path }}
-        run: ansible-test coverage combine --requirements --export tests/output/coverage/
-
-      - name: Show coverage report
-        working-directory: ${{ steps.collection.outputs.path }}
-        run: >-
-          ansible-test coverage report --requirements --docker
-          --omit 'tests/*' --show-missing
-
-      - name: Generate coverage XML
-        if: matrix.versions.publish_coverage
-        working-directory: ${{ steps.collection.outputs.path }}
-        run: |
-          set -euo pipefail
-          ansible-test coverage xml --requirements
-          cp tests/output/reports/coverage.xml "${GITHUB_WORKSPACE}/coverage-units.xml"
-
-      - name: Upload coverage artifact
-        if: matrix.versions.publish_coverage
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: units-coverage
-          path: coverage-units.xml
-          if-no-files-found: error
-
-  pr-metadata:
-    name: Record pull request metadata
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Write pr-metadata.json
-        env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: >-
-          jq -n --argjson number "${PR_NUMBER}" --arg head_sha "${HEAD_SHA}"
-          '{number: $number, head_sha: $head_sha}' > pr-metadata.json
-
-      - name: Upload pr-metadata artifact
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: pr-metadata
-          path: pr-metadata.json
-          if-no-files-found: error
-
-  # Stable status check name for branch protection: "<caller job> / unit-check".
-  unit-check:
-    name: unit-check
-    if: always()
-    needs:
-      - units
-      - pr-metadata
-    runs-on: ubuntu-latest
-    steps:
-      - name: Decide whether the needed jobs succeeded or failed
-        uses: re-actors/alls-green@b5b5b37504aa4183270bd3d855c52a67f212be35 # v1.3.0
-        with:
-          allowed-skips: pr-metadata
-          jobs: ${{ toJSON(needs) }}
+    uses: eco-ansible-content/collections-standards/.github/workflows/units.yml@6874854b402bff433c0d7f7df2344f0a04e6dcf0 # PR1
