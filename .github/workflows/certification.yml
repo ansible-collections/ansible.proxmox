@@ -1,0 +1,25 @@
+---
+# Copy to .github/workflows/certification.yml in the collection repository and
+# pin the reusable workflow to a release commit SHA.
+name: Certification
+
+on:
+  pull_request:
+    branches:
+      - main
+  # Nightly run catches new sanity tests and lint rules added upstream even
+  # when there are no pull requests.
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  certification:
+    uses: eco-ansible-content/collections-standards/.github/workflows/certification.yml@5180c4fa6396ddaedd7b5c3a5add16472557816a # v0.0.1
