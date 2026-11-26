@@ -1,0 +1,224 @@
+# Copyright (c) Ansible Project
+# GNU General Public License v3.0+ (see LICENSES/GPL-3.0-or-later.txt or
+# https://www.gnu.org/licenses/gpl-3.0.txt)
+# SPDX-License-Identifier: GPL-3.0-or-later
+---
+- name: Predict creation of zone {{ sdn_zone_case.zone }}
+  ansible.proxmox.proxmox_sdn_zone:
+    zone: "{{ sdn_zone_case.zone }}"
+    type: "{{ sdn_zone_case.type }}"
+    state: present
+    controller: "{{ sdn_zone_case.create_options.controller | default(omit) }}"
+    vrf_vxlan: "{{ sdn_zone_case.create_options.vrf_vxlan | default(omit) }}"
+    bridge: "{{ sdn_zone_case.create_options.bridge | default(omit) }}"
+    mtu: "{{ sdn_zone_case.create_options.mtu | default(omit) }}"
+  check_mode: true
+  register: sdn_zone_create_check
+
+- name: Read zone after predicted creation {{ sdn_zone_case.zone }}
+  ansible.proxmox.proxmox_sdn_zone_info:
+    zone: "{{ sdn_zone_case.zone }}"
+  register: sdn_zone_after_create_check
+
+- name: Verify predicted create for zone {{ sdn_zone_case.zone }}
+  ansible.builtin.assert:
+    that:
+      - sdn_zone_create_check is changed
+      - sdn_zone_create_check.zone.zone == sdn_zone_case.zone
+      - sdn_zone_create_check.zone.type == sdn_zone_case.type
+      - >-
+        sdn_zone_create_check.zone[sdn_zone_case.required_api_field] | string
+        == sdn_zone_case.required_value | string
+      - >-
+        sdn_zone_create_check.zone.mtu | int
+        == proxmox_sdn_zone_initial_mtu | int
+      - sdn_zone_after_create_check is not changed
+      - sdn_zone_after_create_check.zones == []
+
+- name: Create zone {{ sdn_zone_case.zone }}
+  ansible.proxmox.proxmox_sdn_zone:
+    zone: "{{ sdn_zone_case.zone }}"
+    type: "{{ sdn_zone_case.type }}"
+    state: present
+    controller: "{{ sdn_zone_case.create_options.controller | default(omit) }}"
+    vrf_vxlan: "{{ sdn_zone_case.create_options.vrf_vxlan | default(omit) }}"
+    bridge: "{{ sdn_zone_case.create_options.bridge | default(omit) }}"
+    mtu: "{{ sdn_zone_case.create_options.mtu | default(omit) }}"
+  register: sdn_zone_create
+
+- name: Read created zone {{ sdn_zone_case.zone }}
+  ansible.proxmox.proxmox_sdn_zone_info:
+    zone: "{{ sdn_zone_case.zone }}"
+  register: sdn_zone_created_info
+
+- name: Verify created zone action output against independent information
+  ansible.builtin.assert:
+    that:
+      - sdn_zone_create is changed
+      - sdn_zone_create.zone.zone == sdn_zone_case.zone
+      - sdn_zone_create.zone.type == sdn_zone_case.type
+      - >-
+        sdn_zone_create.zone[sdn_zone_case.required_api_field]
+        == sdn_zone_created_info.zones[0][sdn_zone_case.required_api_field]
+      - >-
+        sdn_zone_create.zone.mtu | int
+        == sdn_zone_created_info.zones[0].mtu | int
+      - sdn_zone_created_info is not changed
+      - sdn_zone_created_info.zones | length == 1
+      - sdn_zone_created_info.zones[0].type == sdn_zone_case.type
+      - >-
+        sdn_zone_created_info.zones[0].mtu | int
+        == proxmox_sdn_zone_initial_mtu | int
+
+- name: Repeat zone creation to test idempotency {{ sdn_zone_case.zone }}
+  ansible.proxmox.proxmox_sdn_zone:
+    zone: "{{ sdn_zone_case.zone }}"
+    type: "{{ sdn_zone_case.type }}"
+    state: present
+    controller: "{{ sdn_zone_case.create_options.controller | default(omit) }}"
+    vrf_vxlan: "{{ sdn_zone_case.create_options.vrf_vxlan | default(omit) }}"
+    bridge: "{{ sdn_zone_case.create_options.bridge | default(omit) }}"
+    mtu: "{{ sdn_zone_case.create_options.mtu | default(omit) }}"
+  register: sdn_zone_create_repeat
+
+- name: Read zone after repeated creation
+  ansible.proxmox.proxmox_sdn_zone_info:
+    zone: "{{ sdn_zone_case.zone }}"
+  register: sdn_zone_after_create_repeat
+
+- name: Verify repeated creation is idempotent
+  ansible.builtin.assert:
+    that:
+      - sdn_zone_create_repeat is not changed
+      - sdn_zone_create_repeat.zone == sdn_zone_after_create_repeat.zones[0]
+      - sdn_zone_after_create_repeat.zones[0] == sdn_zone_created_info.zones[0]
+
+- name: Predict zone MTU update {{ sdn_zone_case.zone }}
+  ansible.proxmox.proxmox_sdn_zone:
+    zone: "{{ sdn_zone_case.zone }}"
+    type: "{{ sdn_zone_case.type }}"
+    mtu: "{{ proxmox_sdn_zone_updated_mtu }}"
+  check_mode: true
+  register: sdn_zone_update_check
+
+- name: Read zone after predicted update
+  ansible.proxmox.proxmox_sdn_zone_info:
+    zone: "{{ sdn_zone_case.zone }}"
+  register: sdn_zone_after_update_check
+
+- name: Verify update prediction without mutation
+  ansible.builtin.assert:
+    that:
+      - sdn_zone_update_check is changed
+      - >-
+        sdn_zone_update_check.zone.mtu | int
+        == proxmox_sdn_zone_updated_mtu | int
+      - >-
+        sdn_zone_update_check.zone[sdn_zone_case.required_api_field] | string
+        == sdn_zone_case.required_value | string
+      - >-
+        sdn_zone_after_update_check.zones[0].mtu | int
+        == proxmox_sdn_zone_initial_mtu | int
+      - sdn_zone_after_update_check.zones[0] == sdn_zone_created_info.zones[0]
+
+- name: Update zone MTU {{ sdn_zone_case.zone }}
+  ansible.proxmox.proxmox_sdn_zone:
+    zone: "{{ sdn_zone_case.zone }}"
+    type: "{{ sdn_zone_case.type }}"
+    mtu: "{{ proxmox_sdn_zone_updated_mtu }}"
+  register: sdn_zone_update
+
+- name: Read updated zone {{ sdn_zone_case.zone }}
+  ansible.proxmox.proxmox_sdn_zone_info:
+    zone: "{{ sdn_zone_case.zone }}"
+  register: sdn_zone_updated_info
+
+- name: Verify update action output against independent information
+  ansible.builtin.assert:
+    that:
+      - sdn_zone_update is changed
+      - sdn_zone_update.zone == sdn_zone_updated_info.zones[0]
+      - >-
+        sdn_zone_updated_info.zones[0].mtu | int
+        == proxmox_sdn_zone_updated_mtu | int
+      - >-
+        sdn_zone_updated_info.zones[0][sdn_zone_case.required_api_field]
+        | string == sdn_zone_case.required_value | string
+
+- name: Repeat zone update to test idempotency {{ sdn_zone_case.zone }}
+  ansible.proxmox.proxmox_sdn_zone:
+    zone: "{{ sdn_zone_case.zone }}"
+    type: "{{ sdn_zone_case.type }}"
+    mtu: "{{ proxmox_sdn_zone_updated_mtu }}"
+  register: sdn_zone_update_repeat
+
+- name: Read zone after repeated update
+  ansible.proxmox.proxmox_sdn_zone_info:
+    zone: "{{ sdn_zone_case.zone }}"
+  register: sdn_zone_after_update_repeat
+
+- name: Verify repeated update is idempotent
+  ansible.builtin.assert:
+    that:
+      - sdn_zone_update_repeat is not changed
+      - sdn_zone_update_repeat.zone == sdn_zone_after_update_repeat.zones[0]
+      - sdn_zone_after_update_repeat.zones[0] == sdn_zone_updated_info.zones[0]
+
+- name: Predict deletion of zone {{ sdn_zone_case.zone }}
+  ansible.proxmox.proxmox_sdn_zone:
+    zone: "{{ sdn_zone_case.zone }}"
+    type: "{{ sdn_zone_case.type }}"
+    state: absent
+  check_mode: true
+  register: sdn_zone_delete_check
+
+- name: Read zone after predicted deletion
+  ansible.proxmox.proxmox_sdn_zone_info:
+    zone: "{{ sdn_zone_case.zone }}"
+  register: sdn_zone_after_delete_check
+
+- name: Verify deletion prediction and unchanged zone
+  ansible.builtin.assert:
+    that:
+      - sdn_zone_delete_check is changed
+      - sdn_zone_delete_check.zone is none
+      - sdn_zone_after_delete_check.zones[0] == sdn_zone_updated_info.zones[0]
+
+- name: Delete zone {{ sdn_zone_case.zone }}
+  ansible.proxmox.proxmox_sdn_zone:
+    zone: "{{ sdn_zone_case.zone }}"
+    type: "{{ sdn_zone_case.type }}"
+    state: absent
+  register: sdn_zone_delete
+
+- name: Read zone after deletion
+  ansible.proxmox.proxmox_sdn_zone_info:
+    zone: "{{ sdn_zone_case.zone }}"
+  register: sdn_zone_after_delete
+
+- name: Verify delete action output and independent absence
+  ansible.builtin.assert:
+    that:
+      - sdn_zone_delete is changed
+      - sdn_zone_delete.zone is none
+      - sdn_zone_after_delete is not changed
+      - sdn_zone_after_delete.zones == []
+
+- name: Delete zone again to test idempotency {{ sdn_zone_case.zone }}
+  ansible.proxmox.proxmox_sdn_zone:
+    zone: "{{ sdn_zone_case.zone }}"
+    type: "{{ sdn_zone_case.type }}"
+    state: absent
+  register: sdn_zone_delete_repeat
+
+- name: Read zone after repeated deletion
+  ansible.proxmox.proxmox_sdn_zone_info:
+    zone: "{{ sdn_zone_case.zone }}"
+  register: sdn_zone_after_delete_repeat
+
+- name: Verify repeated deletion is idempotent
+  ansible.builtin.assert:
+    that:
+      - sdn_zone_delete_repeat is not changed
+      - sdn_zone_delete_repeat.zone is none
+      - sdn_zone_after_delete_repeat.zones == []

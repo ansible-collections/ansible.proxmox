@@ -1,0 +1,82 @@
+# Copyright (c) Ansible Project
+# GNU General Public License v3.0+ (see LICENSES/GPL-3.0-or-later.txt or
+# https://www.gnu.org/licenses/gpl-3.0.txt)
+# SPDX-License-Identifier: GPL-3.0-or-later
+---
+- name: Exercise SDN zone action and information modules together
+  module_defaults:
+    group/ansible.proxmox.proxmox:
+      api_host: "{{ proxmox_api_host }}"
+      api_port: "{{ proxmox_api_port | default(8006) }}"
+      api_user: "{{ proxmox_api_user | default(omit, true) }}"
+      api_password: "{{ proxmox_api_password | default(omit, true) }}"
+      api_token_id: "{{ proxmox_api_token_id | default(omit, true) }}"
+      api_token_secret: "{{ proxmox_api_token_secret | default(omit, true) }}"
+      ca_path: "{{ proxmox_ca_path | default(omit, true) }}"
+      validate_certs: "{{ proxmox_validate_certs | default(true) }}"
+  block:
+    - name: Set unique owned zone IDs and VNI
+      ansible.builtin.set_fact:
+        sdn_zone_test_evpn_id: "e{{ integration_resource_ids[0] }}"
+        sdn_zone_test_vlan_id: "v{{ integration_resource_ids[1] }}"
+        sdn_zone_test_vrf_vxlan: "{{ integration_resource_ids[0] | int }}"
+        sdn_zone_test_cases:
+          - zone: "e{{ integration_resource_ids[0] }}"
+            type: evpn
+          - zone: "v{{ integration_resource_ids[1] }}"
+            type: vlan
+
+    - name: Read zones before claiming fixtures
+      ansible.proxmox.proxmox_sdn_zone_info:
+      register: sdn_zone_preflight
+
+    - name: Require free fixture IDs and VNI before creating zones
+      ansible.builtin.assert:
+        that:
+          - proxmox_sdn_zone_evpn_controller | length > 0
+          - proxmox_sdn_zone_vlan_bridge | length > 0
+          - >-
+            sdn_zone_test_cases | map(attribute='zone')
+            | intersect(sdn_zone_preflight.zones | map(attribute='zone') | list)
+            | length == 0
+          - >-
+            sdn_zone_test_vrf_vxlan | int not in
+            (sdn_zone_preflight.zones | map(attribute='vrf-vxlan')
+            | select('defined') | map('int') | list)
+        fail_msg: >-
+          The configured EVPN controller, VLAN bridge and unused fixture
+          zone IDs/VNI are required.
+
+    - name: Claim owned zones for failure-safe cleanup
+      ansible.builtin.set_fact:
+        sdn_zone_cleanup_allowed: true
+
+    - name: Exercise EVPN zone lifecycle
+      ansible.builtin.include_tasks: lifecycle.yml
+      vars:
+        sdn_zone_case:
+          zone: "{{ sdn_zone_test_evpn_id }}"
+          type: evpn
+          create_options:
+            controller: "{{ proxmox_sdn_zone_evpn_controller }}"
+            vrf_vxlan: "{{ sdn_zone_test_vrf_vxlan }}"
+            mtu: "{{ proxmox_sdn_zone_initial_mtu }}"
+          required_api_field: vrf-vxlan
+          required_value: "{{ sdn_zone_test_vrf_vxlan | int }}"
+
+    - name: Exercise VLAN zone lifecycle
+      ansible.builtin.include_tasks: lifecycle.yml
+      vars:
+        sdn_zone_case:
+          zone: "{{ sdn_zone_test_vlan_id }}"
+          type: vlan
+          create_options:
+            bridge: "{{ proxmox_sdn_zone_vlan_bridge }}"
+            mtu: "{{ proxmox_sdn_zone_initial_mtu }}"
+          required_api_field: bridge
+          required_value: "{{ proxmox_sdn_zone_vlan_bridge }}"
+
+  always:
+    - name: Clean and verify owned zones after success or failure
+      ansible.builtin.include_tasks: cleanup.yml
+      when: sdn_zone_cleanup_allowed | default(false)
