@@ -1,0 +1,2 @@
+trivial:
+  - Add a pull request workflow that validates changelog fragments using the shared Ansible Network action.
