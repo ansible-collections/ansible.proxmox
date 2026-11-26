@@ -1,0 +1,30 @@
+# Copyright (c) Ansible Project
+# GNU General Public License v3.0+ (see LICENSES/GPL-3.0-or-later.txt or
+# https://www.gnu.org/licenses/gpl-3.0.txt)
+# SPDX-License-Identifier: GPL-3.0-or-later
+---
+- name: Remove only the owned SDN zone fixtures  # noqa: args[module]
+  ansible.proxmox.proxmox_sdn_zone:
+    zone: "{{ item.zone }}"
+    type: "{{ item.type }}"
+    state: absent
+  loop: "{{ sdn_zone_test_cases }}"
+  register: sdn_zone_cleanup_results
+  ignore_errors: true
+
+- name: Independently read SDN zones after cleanup  # noqa: args[module]
+  ansible.proxmox.proxmox_sdn_zone_info:
+  register: sdn_zone_cleanup_info
+  ignore_errors: true
+
+- name: Require all owned zones to be absent after cleanup
+  ansible.builtin.assert:
+    that:
+      - sdn_zone_cleanup_results is not failed
+      - sdn_zone_cleanup_info is not failed
+      - >-
+        sdn_zone_test_cases | map(attribute='zone')
+        | intersect(sdn_zone_cleanup_info.zones | default([])
+        | map(attribute='zone') | list)
+        | length == 0
+    fail_msg: Failed to verify cleanup of one or more owned SDN zones.

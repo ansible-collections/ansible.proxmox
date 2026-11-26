@@ -80,6 +80,55 @@ class PoolApi:
         del self.records[parameters["poolid"]]
 
 
+class SdnZonesApi:
+    """Model SDN zone list and item endpoints with digest-aware writes."""
+
+    def __init__(self):
+        self.records = {}
+        self.reads = []
+        self.writes = []
+        self.get_error = None
+        self.cluster = SimpleNamespace(sdn=SimpleNamespace(zones=self))
+
+    def __call__(self, zone):
+        return SdnZoneApi(self, zone)
+
+    def get(self, **parameters):
+        self.reads.append(("LIST", None, parameters))
+        if self.get_error is not None:
+            raise self.get_error
+        zones = [copy.deepcopy(record) for record in self.records.values()]
+        if parameters.get("type"):
+            zones = [record for record in zones if record.get("type") == parameters["type"]]
+        return zones
+
+    def post(self, **parameters):
+        self.writes.append(("POST", parameters))
+        self.records[parameters["zone"]] = dict(parameters, digest="digest-1")
+
+
+class SdnZoneApi:
+    """Model one zone's PUT and DELETE operations."""
+
+    def __init__(self, zones, zone):
+        self.zones = zones
+        self.zone = zone
+
+    def put(self, **parameters):
+        self.zones.writes.append(("PUT", self.zone, copy.deepcopy(parameters)))
+        record = self.zones.records[self.zone]
+        for key in parameters.pop("delete", "").split(","):
+            if key:
+                record.pop(key, None)
+        parameters.pop("digest", None)
+        record.update(parameters)
+        record["digest"] = "digest-{0}".format(len(self.zones.writes) + 1)
+
+    def delete(self):
+        self.zones.writes.append(("DELETE", self.zone, {}))
+        del self.zones.records[self.zone]
+
+
 @pytest.fixture
 def pool_environment():
     """Build an isolated module/client/API with the real shared error handling."""
@@ -99,6 +148,40 @@ def pool_environment():
         module.fail_json = fail_json
         client = ProxmoxClient(module)
         api = PoolApi()
+        api.records = copy.deepcopy(records or {})
+        client._api = api
+        client.validate_pve_permissions = Mock()
+        return module, client, api
+    return create
+
+
+@pytest.fixture
+def sdn_zone_environment():
+    """Build an isolated module/client/API for SDN zone module tests."""
+    def create(check_mode=False, records=None, **parameters):
+        params = {
+            "zone": "office", "type": None, "state": "present", "nodes": None, "mtu": None,
+            "dns": None, "reversedns": None, "dnszone": None, "ipam": None, "dhcp": None,
+            "dedicated_vrf": None, "route": None, "bridge": None, "bridge_disable_mac_learning": None,
+            "tag": None, "vlan_protocol": None, "peers": None, "fabric": None, "vxlan_port": None,
+            "controller": None, "vrf_vxlan": None, "secondary_controllers": None, "mac": None,
+            "exitnodes": None, "exitnodes_local_routing": None, "exitnodes_primary": None,
+            "advertise_subnets": None, "disable_arp_nd_suppression": None, "rt_import": None,
+            "dp_id": None, "digest": None, "running": None, "pending": None,
+        }
+        params.update(parameters)
+        module = SimpleNamespace(params=params, check_mode=check_mode, Exit=PoolExit, Fail=PoolFail)
+
+        def exit_json(**result):
+            raise PoolExit(result)
+
+        def fail_json(**result):
+            raise PoolFail(result)
+
+        module.exit_json = exit_json
+        module.fail_json = fail_json
+        client = ProxmoxClient(module)
+        api = SdnZonesApi()
         api.records = copy.deepcopy(records or {})
         client._api = api
         client.validate_pve_permissions = Mock()

@@ -1,0 +1,11 @@
+# Copyright (c) Ansible Project
+# GNU General Public License v3.0+ (see LICENSES/GPL-3.0-or-later.txt or
+# https://www.gnu.org/licenses/gpl-3.0.txt)
+# SPDX-License-Identifier: GPL-3.0-or-later
+---
+# Override these values if the integration cluster's SDN fixtures use
+# different IDs or bridges.
+proxmox_sdn_zone_evpn_controller: ansible
+proxmox_sdn_zone_vlan_bridge: vmbr0
+proxmox_sdn_zone_initial_mtu: 1400
+proxmox_sdn_zone_updated_mtu: 1450
