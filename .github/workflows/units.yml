@@ -21,4 +21,4 @@ permissions:
 
 jobs:
   units:
-    uses: eco-ansible-content/collections-standards/.github/workflows/units.yml@6874854b402bff433c0d7f7df2344f0a04e6dcf0 # PR1
+    uses: eco-ansible-content/collections-standards/.github/workflows/units.yml@262daf453f9213ba9761dfa54624be8b9ed41555 # main
