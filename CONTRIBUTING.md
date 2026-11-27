@@ -217,6 +217,22 @@ predictions, removal of a user's last group, deletion of a populated group while
 preserving member accounts, and rejection of reserved group path segments.
 Run only with explicit authorization to create and remove these test identities.
 
+## Firewall resource integration tests
+
+Run `ansible-test integration proxmox_firewall_alias proxmox_firewall_ipset
+proxmox_firewall_security_group` with the shared private integration configuration.
+Each target pairs its lifecycle module with its independent info module, claims
+only absent names, creates unused definitions, and verifies cleanup after errors.
+Tests cover creation, reconciliation, omission/empty values, rename, no-ops,
+check mode, stale digests and nonempty deletion guards. Groups remain unattached
+and their test rules are disabled; the targets never enable a firewall.
+
+Alias/IP-set targets require existing QEMU and LXC guests. They discover one of
+each on `proxmox_node`, or use `proxmox_firewall_test_guests` entries containing
+`scope`, `node` and `vmid`. Both guest types are required. Only owned unused
+firewall definitions are changed; no guest is created, started or stopped.
+Run only with authorization to create and remove these temporary definitions.
+
 ## Role identity integration tests
 
 The `proxmox_role` target tests the lifecycle module together with
